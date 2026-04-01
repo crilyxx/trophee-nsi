@@ -1,0 +1,3992 @@
+import pygame
+import random
+import os
+import math
+from collections import deque
+
+slot_actuel = 0
+
+def sauvegarder(slot):
+    global niveau_max, argent, armes_debloquees, score_total, points_competences, competences
+    if slot == 0:
+        return
+    try:
+        with open(f"save{slot}.txt", "w") as f:
+            f.write(f"{niveau_max}\n")
+            f.write(f"{argent}\n")
+            for arme in ARMES_SHOP:
+                f.write(f"{int(armes_debloquees[arme])}\n")
+            for arme in armes_stats:
+                f.write(f"{armes_niveaux.get(arme, 0)}\n")
+            f.write(f"{score_total}\n")
+            f.write(f"{points_competences}\n")
+            for cle in competences:
+                f.write(f"{competences[cle]['niveau']}\n")
+    except Exception as e:
+        print(f"Erreur sauvegarde : {e}")
+
+def charger(slot):
+    global niveau_max, argent, armes_debloquees, slot_actuel
+    global score_total, points_competences, competences, armes_niveaux
+    slot_actuel = slot
+    try:
+        with open(f"save{slot}.txt", "r") as f:
+            lignes = f.readlines()
+            idx = 0
+            niveau_max         = int(lignes[idx].strip()); idx += 1
+            argent             = int(lignes[idx].strip()); idx += 1
+            for arme in ARMES_SHOP:
+                armes_debloquees[arme] = int(lignes[idx].strip()); idx += 1
+            for arme in armes_stats:
+                armes_niveaux[arme] = int(lignes[idx].strip()); idx += 1
+            score_total        = int(lignes[idx].strip()); idx += 1
+            points_competences = int(lignes[idx].strip()); idx += 1
+            for cle in competences:
+                competences[cle]["niveau"] = int(lignes[idx].strip()); idx += 1
+    except Exception as e:
+        print(f"Erreur chargement slot {slot} : {e}")
+        niveau_max = 1
+        argent = 0
+        armes_debloquees = {a: 0 for a in ARMES_SHOP}
+        armes_niveaux    = {a: 0 for a in armes_stats}
+        score_total = 0
+        points_competences = 0
+        for cle in competences:
+            competences[cle]["niveau"] = 0
+    niveau_max = max(1, niveau_max)
+
+def recuperer_infos_save(slot):
+    try:
+        with open(f"save{slot}.txt", "r") as f:
+            lignes = f.readlines()
+            if len(lignes) >= 2 + len(ARMES_SHOP):
+                niv = lignes[0].strip()
+                arg = lignes[1].strip()
+                nb = sum(int(lignes[2 + i].strip()) for i in range(len(ARMES_SHOP)))
+                return {"niv": niv, "argent": arg, "nb": nb + 1}
+    except:
+        return None
+    return None
+
+pygame.init()
+l = 1920
+h = 1080
+fond = pygame.image.load("images/niveau_noel/sapin.png")
+fond = pygame.transform.smoothscale(fond, (l, h))
+info = pygame.display.Info()
+
+BASE_L = 1920
+BASE_H = 1080
+fenetre_w = min(info.current_w, BASE_L)
+fenetre_h = min(info.current_h, BASE_H)
+ecran = pygame.display.set_mode((fenetre_w, fenetre_h), pygame.RESIZABLE)
+SCALE = 1.0
+pygame.display.set_caption("The Goblin Game")
+surface_jeu = pygame.Surface((l, h)).convert()
+fond_espace = pygame.image.load("images/map_espace.png").convert()
+
+surface_alpha = pygame.Surface((l, h), pygame.SRCALPHA)
+surface_flash = pygame.Surface((l, h))
+
+bon_bleu = (10, 20, 40)
+blanc = (255, 255, 255)
+noir = (0, 0, 0)
+gris = (125, 125, 125)
+
+bouton_save1 = None
+bouton_save2 = None
+bouton_save3 = None
+score = 0
+argent = 0
+vague = 1
+
+font = pygame.font.Font(None, 48)
+font_titre = pygame.font.SysFont(None, 120)
+font_sous = pygame.font.SysFont(None, 40)
+font_police = pygame.font.SysFont(None, 80)
+font_sub = pygame.font.SysFont(None, 60)
+font_titre_gros = pygame.font.SysFont(None, 150)
+font_hud = pygame.font.SysFont(None, 40)
+font_dmg = pygame.font.SysFont(None, 36)
+
+derniere_pos_souris_jeu = (0, 0)
+
+pygame.mixer.init()
+
+# Charger les musiques d'ambiance
+musiques_themes = {
+    "foret":    "sounds/ambiance_foret.ogg",
+    "desert":   "sounds/ambiance_desert.ogg",
+    "ile":      "sounds/ambiance_ile.ogg",
+    "montagne": "sounds/ambiance_montagne.ogg",
+    "espace":   "sounds/ambiance_espace.ogg",
+    "menu":     "sounds/ambiance_menu.ogg",  
+}
+theme_musique_actuel = None
+
+def jouer_musique(theme):
+    global theme_musique_actuel
+    if theme == theme_musique_actuel:
+        return
+    chemin = musiques_themes.get(theme, "")
+    if os.path.exists(chemin):
+        pygame.mixer.music.stop()
+        pygame.mixer.music.load(chemin)
+        pygame.mixer.music.set_volume(0.4)
+        pygame.mixer.music.play(-1)
+        theme_musique_actuel = theme
+
+numero_niveau = 1
+boutons_niveaux = []
+bouton_menu = None
+bouton_shop = None
+bouton_sel_niveau = None
+bouton_succes = None
+bouton_jouer = None
+bouton_quitter = None
+bouton_ecran_titre = None
+bouton_sel_niveau_special = None
+bouton_credits = None
+bouton_rejouer = None
+bouton_menu_go = None
+bouton_suite = None
+niveau_max = 1
+
+TAILLE_TUILE_BASE = 64
+TAILLE_TUILE = int(TAILLE_TUILE_BASE * SCALE)
+SOLIDES = [1, 4]
+# ============================================================
+# ARBRE DE COMPETENCES
+# Score total accumule sur tous les niveaux joues
+# Chaque point de competence coute 500 points de score
+# ============================================================
+score_total = 0          # score cumule au fil des parties
+points_competences = 0   # points disponibles a depenser
+
+competences = {
+    "sante":   {"niveau": 0, "max": 50, "bonus_par_niveau": 5,    "couts": [1,1,2,2,3,3,4,4,5,5] * 5},
+    "defense": {"niveau": 0, "max": 30, "bonus_par_niveau": 0.03, "couts": [1,2,2,3,3,4,4,5,5,6] * 5},
+    "degats":  {"niveau": 0, "max": 50, "bonus_par_niveau": 0.08, "couts": [1,1,2,2,3,3,4,4,5,5] * 5},
+    "vitesse": {"niveau": 0, "max": 5,  "bonus_par_niveau": 1,    "couts": [2,3,4,5,6]},
+}
+
+def max_debloque_competence(cle):
+    """Retourne le nombre de niveaux débloqués selon la progression en histoire."""
+    if cle == "vitesse":
+        return competences["vitesse"]["max"]  # vitesse toujours limitée à 5
+    # 10 niveaux de compétence débloqués par thème complété
+    # thème 1 : niv 1-10  → 10 pts, thème 2 : 11-20 → 20 pts, etc.
+    paliers = [10, 20, 30, 40, 50]   # niveaux histoire franchis
+    debloques = [10, 20, 30, 40, 50] # niveaux de compétence correspondants
+    for i in range(len(paliers) - 1, -1, -1):
+        if niveau_max > paliers[i]:
+            return debloques[i]
+    if niveau_max >= 1:
+        return min(10, niveau_max)   # on débloque 1 par niveau dans le 1er thème
+    return 0
+# bonus_par_niveau :
+#   sante   -> +5 HP max par niveau
+#   defense -> +5% armure par niveau (mult_armure *= 0.95)
+#   degats  -> +8% degats par niveau
+#   vitesse -> +1 deplacement par niveau (plafonne a 5)
+
+bouton_arbre = None
+scroll_arbre = 0
+
+vitesse = 1
+timer_attaque = 0
+objectif = 1000
+vague_actuelle = 1
+nb_vagues_total = 3
+ennemis_par_vague = 10
+ennemis_spawnes_vague = 0
+ennemis_tues_vague = 0
+boss_actif = None
+boss_spawne = False
+boss_anim_spawn = 0
+boss_type_niveau = None
+
+niveaux = [
+    # Monde 1 - Foret (niveaux 1-10)
+    {"nb_vagues": 3, "ennemis_par_vague": 10, "delai_ennemi": 120, "vitesse": 1, "boss": None},
+    {"nb_vagues": 3, "ennemis_par_vague": 12, "delai_ennemi": 110, "vitesse": 1, "boss": None},
+    {"nb_vagues": 4, "ennemis_par_vague": 12, "delai_ennemi": 100, "vitesse": 1, "boss": None},
+    {"nb_vagues": 4, "ennemis_par_vague": 15, "delai_ennemi": 90,  "vitesse": 2, "boss": "troll"},
+    {"nb_vagues": 4, "ennemis_par_vague": 15, "delai_ennemi": 80,  "vitesse": 2, "boss": None},
+    {"nb_vagues": 5, "ennemis_par_vague": 15, "delai_ennemi": 70,  "vitesse": 2, "boss": None},
+    {"nb_vagues": 5, "ennemis_par_vague": 18, "delai_ennemi": 60,  "vitesse": 3, "boss": "chamane"},
+    {"nb_vagues": 5, "ennemis_par_vague": 18, "delai_ennemi": 55,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 6, "ennemis_par_vague": 20, "delai_ennemi": 50,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 6, "ennemis_par_vague": 20, "delai_ennemi": 45,  "vitesse": 4, "boss": "roi"},
+    # Monde 2 - Desert (niveaux 11-20)
+    {"nb_vagues": 6, "ennemis_par_vague": 20, "delai_ennemi": 80,  "vitesse": 2, "boss": None},
+    {"nb_vagues": 7, "ennemis_par_vague": 22, "delai_ennemi": 70,  "vitesse": 3, "boss": "desert"},
+    {"nb_vagues": 7, "ennemis_par_vague": 22, "delai_ennemi": 65,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 7, "ennemis_par_vague": 25, "delai_ennemi": 60,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 8, "ennemis_par_vague": 25, "delai_ennemi": 55,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 8, "ennemis_par_vague": 25, "delai_ennemi": 50,  "vitesse": 4, "boss": "desert"},
+    {"nb_vagues": 8, "ennemis_par_vague": 28, "delai_ennemi": 45,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 9, "ennemis_par_vague": 28, "delai_ennemi": 40,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 9, "ennemis_par_vague": 30, "delai_ennemi": 35,  "vitesse": 5, "boss": None},
+    {"nb_vagues":10, "ennemis_par_vague": 30, "delai_ennemi": 30,  "vitesse": 5, "boss": "desert"},
+    # Monde 3 - Ile (niveaux 21-30)
+    {"nb_vagues": 6,  "ennemis_par_vague": 22, "delai_ennemi": 75,  "vitesse": 2, "boss": None},
+    {"nb_vagues": 7,  "ennemis_par_vague": 24, "delai_ennemi": 68,  "vitesse": 3, "boss": "ile"},
+    {"nb_vagues": 7,  "ennemis_par_vague": 24, "delai_ennemi": 62,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 7,  "ennemis_par_vague": 27, "delai_ennemi": 57,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 8,  "ennemis_par_vague": 27, "delai_ennemi": 52,  "vitesse": 4, "boss": "ile"},
+    {"nb_vagues": 8,  "ennemis_par_vague": 27, "delai_ennemi": 48,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 8,  "ennemis_par_vague": 30, "delai_ennemi": 44,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 30, "delai_ennemi": 40,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 32, "delai_ennemi": 37,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 10, "ennemis_par_vague": 32, "delai_ennemi": 34,  "vitesse": 5, "boss": "ile"},
+    # Monde 4 - Montagne (niveaux 31-40)
+    {"nb_vagues": 7,  "ennemis_par_vague": 25, "delai_ennemi": 70,  "vitesse": 2, "boss": None},
+    {"nb_vagues": 8,  "ennemis_par_vague": 27, "delai_ennemi": 63,  "vitesse": 3, "boss": "Montagne"},
+    {"nb_vagues": 8,  "ennemis_par_vague": 27, "delai_ennemi": 58,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 8,  "ennemis_par_vague": 30, "delai_ennemi": 53,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 30, "delai_ennemi": 48,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 30, "delai_ennemi": 44,  "vitesse": 4, "boss": "Montagne"},
+    {"nb_vagues": 9,  "ennemis_par_vague": 33, "delai_ennemi": 40,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 10, "ennemis_par_vague": 33, "delai_ennemi": 36,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 10, "ennemis_par_vague": 35, "delai_ennemi": 32,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 11, "ennemis_par_vague": 35, "delai_ennemi": 28,  "vitesse": 5, "boss": "Montagne"},
+    # Monde 5 - Espace (niveaux 41-50)
+    {"nb_vagues": 8,  "ennemis_par_vague": 28, "delai_ennemi": 65,  "vitesse": 3, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 30, "delai_ennemi": 58,  "vitesse": 3, "boss": "espace"},
+    {"nb_vagues": 9,  "ennemis_par_vague": 30, "delai_ennemi": 52,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 9,  "ennemis_par_vague": 33, "delai_ennemi": 47,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 10, "ennemis_par_vague": 33, "delai_ennemi": 42,  "vitesse": 4, "boss": None},
+    {"nb_vagues": 10, "ennemis_par_vague": 33, "delai_ennemi": 38,  "vitesse": 5, "boss": "espace"},
+    {"nb_vagues": 10, "ennemis_par_vague": 36, "delai_ennemi": 34,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 11, "ennemis_par_vague": 36, "delai_ennemi": 30,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 11, "ennemis_par_vague": 38, "delai_ennemi": 26,  "vitesse": 5, "boss": None},
+    {"nb_vagues": 12, "ennemis_par_vague": 40, "delai_ennemi": 22,  "vitesse": 5, "boss": "espace"},
+]
+
+joueur = {
+    "x": 1984, "y": 1088,
+    "vitesse": 5,
+    "taille": 40,
+    "hp": 60,
+    "hp_max": 60,
+    "portee_attaque": 80,
+    "degats": 10,
+    "direction": "devant",
+    "frame_actuelle": 0,
+    "etat_anim": "idle",
+    "timer_anim": 0,
+    "en_mouvement": False
+}
+
+objectifs_points = [
+    {"x": 1984, "y": 1088, "hp": 500, "hp_max": 500}
+]
+
+# ============================================================
+# ARMES - Stats completes (12 armes au total)
+# Chaque arme a un effet special unique qui change la facon de jouer.
+#
+# Effets speciaux :
+#   "combo"          -> 3 coups consecutifs = le 3eme fait x1.5 degats
+#   "recul"          -> repousse les ennemis frappes vers l'arriere
+#   "saignement"     -> inflige des degats sur la duree apres le coup
+#   "critique"       -> 25% de chance de faire x2 degats
+#   "marquage"       -> l'ennemi frappe recoit +50% de degats pendant 3 secondes
+#   "tranchant"      -> les ennemis tues blessent ceux autour d'eux en mourant
+#   "ralentissement" -> reduit la vitesse des ennemis touches pendant 3 secondes
+#   "poison"         -> empoisonne l'ennemi (degats legers, cumulables)
+#   "onde"           -> repousse TOUS les ennemis proches a chaque frappe
+#   "surcharge"      -> les degats augmentent si on ne frappe pas pendant 2 secondes
+#   "ecrasement"     -> tue instantanement tout ennemi sous 25% de HP
+# ============================================================
+armes_stats = {
+    # --- ARMES DE BASE ---
+    "poing":    {"portee": 60,  "angle": 120, "degats": 8,   "cooldown": 8,  "description": "Rapide mais faible",
+                 "effet": "combo",         "effet_desc": "Combo : 3 coups consecutifs = x1.5 degats"},
+    "gourdin":  {"portee": 65,  "angle": 130, "degats": 12,  "cooldown": 10, "description": "Un baton renforce",
+                 "effet": "recul",         "effet_desc": "Recul : repousse les ennemis frappes"},
+    "dague":    {"portee": 55,  "angle": 60,  "degats": 12,  "cooldown": 5,  "description": "Ultra rapide, courte portee",
+                 "effet": "saignement",    "effet_desc": "Saignement : degats sur la duree apres le coup"},
+
+    # --- ARMES INTERMEDIAIRES ---
+    "epee":     {"portee": 90,  "angle": 80,  "degats": 18,  "cooldown": 12, "description": "Bonne portee, degats corrects",
+                 "effet": "critique",      "effet_desc": "Critique : 25% de chance de faire x2 degats"},
+    "faux":     {"portee": 100, "angle": 150, "degats": 22,  "cooldown": 18, "description": "Large balayage en arc",
+                 "effet": "saignement",    "effet_desc": "Saignement : tous les ennemis dans l'arc saignent"},
+    "lance":    {"portee": 140, "angle": 40,  "degats": 20,  "cooldown": 15, "description": "Longue portee, cone etroit",
+                 "effet": "marquage",      "effet_desc": "Marquage : cible vulnerable (+50% degats) pendant 3 sec"},
+    "hache":    {"portee": 75,  "angle": 140, "degats": 25,  "cooldown": 22, "description": "Large balayage, lent",
+                 "effet": "tranchant",     "effet_desc": "Tranchant : les ennemis tues blessent ceux autour"},
+
+    # --- ARMES AVANCEES ---
+    "trident":  {"portee": 110, "angle": 55,  "degats": 30,  "cooldown": 18, "description": "Trois pointes, portee moyenne",
+                 "effet": "poison",        "effet_desc": "Poison : degats lents cumulables sur la duree"},
+    "arbalete": {"portee": 180, "angle": 25,  "degats": 35,  "cooldown": 25, "description": "Tres longue portee, precision requise",
+                 "effet": "ralentissement","effet_desc": "Ralentissement : vitesse reduite de moitie pendant 3 sec"},
+    "marteau":  {"portee": 70,  "angle": 160, "degats": 40,  "cooldown": 35, "description": "Degats massifs, tres lent",
+                 "effet": "onde",          "effet_desc": "Onde de choc : repousse tous les ennemis proches"},
+
+    # --- ARMES LEGENDAIRES ---
+    "foudre":   {"portee": 130, "angle": 70,  "degats": 55,  "cooldown": 30, "description": "Frappe rapide et puissante",
+                 "effet": "surcharge",     "effet_desc": "Surcharge : +100% degats si on attend 2 sec avant de frapper"},
+    "katana":   {"portee": 95,  "angle": 90,  "degats": 45,  "cooldown": 14, "description": "Vitesse et precision parfaites",
+                 "effet": "fureur",
+                 "effet_desc": "Fureur : +15% degats/kill (max 5 stacks), -5% CD/stack apres 3"},
+    # --- ARMES DESERT ---
+    "cimeterre":  {"portee": 85,  "angle": 100, "degats": 24, "cooldown": 13, "description": "Lame courbee du desert",
+                "effet": "critique", "effet_desc": "Critique : 30% de chance de faire x2 degats"},
+    "fouet":      {"portee": 150, "angle": 50,  "degats": 18, "cooldown": 10, "description": "Portee elevee, tres rapide",
+                "effet": "ralentissement", "effet_desc": "Ralentissement : ralentit les ennemis touches"},
+
+    # --- ARMES ILE ---
+    "harpon":     {"portee": 200, "angle": 15,  "degats": 40, "cooldown": 28, "description": "Tres longue portee, etroit",
+                "effet": "marquage", "effet_desc": "Marquage : cible vulnerable (+50% degats)"},
+    "sabre_mer":  {"portee": 80,  "angle": 110, "degats": 26, "cooldown": 15, "description": "Lame de pirate rouilee",
+                "effet": "poison", "effet_desc": "Poison : la rouille empoisonne les ennemis"},
+
+    # --- ARMES MONTAGNE ---
+    "pic":        {"portee": 65,  "angle": 70,  "degats": 35, "cooldown": 20, "description": "Pic de mineur, frappe fort",
+                "effet": "recul", "effet_desc": "Recul : repousse violemment les ennemis"},
+    "masse_glace":{"portee": 75,  "angle": 150, "degats": 38, "cooldown": 30, "description": "Masse gelante, large balayage",
+                "effet": "onde", "effet_desc": "Onde : repousse tous les ennemis proches"},
+
+    # --- ARMES ESPACE ---
+    "laser":      {"portee": 250, "angle": 10,  "degats": 50, "cooldown": 22, "description": "Rayon laser de precision",
+                "effet": "surcharge", "effet_desc": "Surcharge : +100% degats si on attend 2 sec"},
+    "plasma_gun": {"portee": 120, "angle": 60,  "degats": 60, "cooldown": 35, "description": "Pistolet a plasma devastateur",
+                "effet": "onde", "effet_desc": "Onde de plasma : repousse et brule tout"},
+}
+
+arme_actuelle = "poing"
+
+# Liste des armes disponibles dans le shop histoire (sans poing et gourdin qui sont gratuits)
+ARMES_SHOP = ["gourdin", "dague", "epee", "faux", "lance", "hache", "trident", "arbalete", "marteau", "foudre", "katana"
+              , "cimeterre", "fouet", "harpon", "sabre_mer", "pic", "masse_glace", "laser", "plasma_gun"]
+
+# Prix des armes dans le shop histoire (progression logique)
+PRIX_ARMES_HISTOIRE = {
+    "gourdin":  50,
+    "dague":    200,
+    "epee":     300,
+    "faux":     450,
+    "lance":    600,
+    "hache":    800,
+    "trident":  1000,
+    "arbalete": 1200,
+    "marteau":  1500,
+    "foudre":   2500,
+    "katana":   3000,
+    "cimeterre":   700,
+    "fouet":       650,
+    "harpon":      1100,
+    "sabre_mer":   1050,
+    "pic":         1600,
+    "masse_glace": 1700,
+    "laser":       2800,
+    "plasma_gun":  3200,
+}
+
+# Niveau minimum requis pour acheter chaque arme
+NIVEAU_REQUIS_ARMES = {
+    "gourdin":  1,
+    "dague":    2,
+    "epee":     3,
+    "faux":     4,
+    "lance":    5,
+    "hache":    6,
+    "trident":  8,
+    "arbalete": 11,
+    "marteau":  12,
+    "foudre":   16,
+    "katana":   18,
+    "cimeterre":   20,
+    "fouet":       25,
+    "harpon":      29,
+    "sabre_mer":   33,
+    "pic":         37,
+    "masse_glace": 40,
+    "laser":       45,
+    "plasma_gun":  48,
+}
+
+armes_debloquees = {a: 0 for a in ARMES_SHOP}
+
+# Niveaux d'upgrade de chaque arme (0 = pas upgradée)
+armes_niveaux = {a: 0 for a in list(armes_stats.keys())}
+UPGRADE_MAX = 5
+
+def cout_upgrade_arme(arme, niveau_actuel):
+    base = {
+        "poing": 50, "gourdin": 100, "dague": 150, "epee": 200,
+        "faux": 250, "lance": 300, "hache": 350, "trident": 400,
+        "arbalete": 450, "marteau": 500, "foudre": 600, "katana": 700,
+         "cimeterre": 350, "fouet": 320,
+        "harpon": 500, "sabre_mer": 480, "pic": 600, "masse_glace": 650,
+        "laser": 800, "plasma_gun": 900,
+    }
+    return base.get(arme, 300) * (2 ** niveau_actuel)
+
+def get_degats_arme(arme):
+    """Retourne les dégâts réels de l'arme avec les upgrades appliqués."""
+    base = armes_stats[arme]["degats"]
+    niv = armes_niveaux.get(arme, 0)
+    return int(base * (1 + niv * 0.20))  # +20% par niveau d'upgrade
+
+def get_portee_arme(arme):
+    base = armes_stats[arme]["portee"]
+    niv = armes_niveaux.get(arme, 0)
+    return int(base * (1 + niv * 0.10))  # +10% portée par niveau
+
+def get_cooldown_arme(arme):
+    base = armes_stats[arme]["cooldown"]
+    niv = armes_niveaux.get(arme, 0)
+    return max(2, int(base * (1 - niv * 0.08)))  # -8% CD par niveau
+
+gobelin_img = pygame.image.load("images/gobelin.png").convert_alpha()
+gobelin_img = pygame.transform.smoothscale(gobelin_img, (int(40*SCALE), int(40*SCALE)))
+img_pn = pygame.image.load("images/niveau_noel/pere_noel.png").convert_alpha()
+img_pn = pygame.transform.smoothscale(img_pn, (int(70*SCALE), int(70*SCALE)))
+img_bdn = pygame.image.load("images/niveau_noel/bonhomme_de_neige.png").convert_alpha()
+img_bdn = pygame.transform.smoothscale(img_bdn, (int(70*SCALE), int(70*SCALE)))
+
+# ============================================================
+# STATS DE BASE DES ENNEMIS
+# ============================================================
+STATS_BASE_GOBELINS = {
+    "foret": [
+        {"taille": 35, "hp": 10,  "type": "feu", "score": 50,  "argent": 2,  "poids": 20, "vitesse": 4, "degats": 0.08},
+        {"taille": 50, "hp": 20,  "type": "feu", "score": 100, "argent": 5,  "poids": 60, "vitesse": 2, "degats": 0.15},
+        {"taille": 65, "hp": 35,  "type": "feu", "score": 150, "argent": 10, "poids": 30, "vitesse": 2, "degats": 0.25},
+        {"taille": 85, "hp": 60,  "type": "feu", "score": 200, "argent": 20, "poids": 15, "vitesse": 2, "degats": 0.40},
+    ],
+    "desert": [
+        {"taille": 35, "hp": 12,  "type": "sable", "score": 60,  "argent": 3,  "poids": 20, "vitesse": 5, "degats": 0.10},
+        {"taille": 50, "hp": 25,  "type": "sable", "score": 120, "argent": 6,  "poids": 55, "vitesse": 3, "degats": 0.18},
+        {"taille": 65, "hp": 45,  "type": "sable", "score": 180, "argent": 12, "poids": 25, "vitesse": 2, "degats": 0.30},
+        {"taille": 85, "hp": 75,  "type": "sable", "score": 250, "argent": 25, "poids": 10, "vitesse": 2, "degats": 0.50},
+    ],
+    "ile": [
+        {"taille": 35, "hp": 15,  "type": "eau",    "score": 70,  "argent": 3,  "poids": 20, "vitesse": 5, "degats": 0.12},
+        {"taille": 50, "hp": 30,  "type": "eau",    "score": 140, "argent": 7,  "poids": 55, "vitesse": 4, "degats": 0.20},
+        {"taille": 65, "hp": 55,  "type": "eau",    "score": 200, "argent": 14, "poids": 25, "vitesse": 3, "degats": 0.35},
+        {"taille": 85, "hp": 90,  "type": "eau",    "score": 300, "argent": 30, "poids": 10, "vitesse": 2, "degats": 0.55},
+    ],
+    "montagne": [
+        {"taille": 35, "hp": 18,  "type": "glace",  "score": 80,  "argent": 4,  "poids": 20, "vitesse": 3, "degats": 0.14},
+        {"taille": 50, "hp": 35,  "type": "glace",  "score": 160, "argent": 8,  "poids": 55, "vitesse": 2, "degats": 0.22},
+        {"taille": 65, "hp": 65,  "type": "glace",  "score": 220, "argent": 16, "poids": 25, "vitesse": 2, "degats": 0.40},
+        {"taille": 85, "hp": 100, "type": "glace",  "score": 350, "argent": 35, "poids": 10, "vitesse": 2, "degats": 0.60},
+    ],
+    "espace": [
+        {"taille": 35, "hp": 20,  "type": "plasma", "score": 90,  "argent": 5,  "poids": 20, "vitesse": 6, "degats": 0.15},
+        {"taille": 50, "hp": 40,  "type": "plasma", "score": 180, "argent": 9,  "poids": 55, "vitesse": 4, "degats": 0.25},
+        {"taille": 65, "hp": 75,  "type": "plasma", "score": 260, "argent": 18, "poids": 25, "vitesse": 3, "degats": 0.45},
+        {"taille": 85, "hp": 120, "type": "plasma", "score": 400, "argent": 40, "poids": 10, "vitesse": 2, "degats": 0.70},
+    ],
+    
+}
+
+types_gobelins = {
+    "foret":    [dict(e) for e in STATS_BASE_GOBELINS["foret"]],
+    "desert":   [dict(e) for e in STATS_BASE_GOBELINS["desert"]],
+    "ile":      [dict(e) for e in STATS_BASE_GOBELINS["ile"]],
+    "montagne": [dict(e) for e in STATS_BASE_GOBELINS["montagne"]],
+    "espace":   [dict(e) for e in STATS_BASE_GOBELINS["espace"]],
+}
+
+def reinitialiser_stats_gobelins():
+    for theme in types_gobelins:
+        for i in range(len(types_gobelins[theme])):
+            base = STATS_BASE_GOBELINS[theme][i]
+            types_gobelins[theme][i]["hp"]      = base["hp"]
+            types_gobelins[theme][i]["degats"]  = base["degats"]
+            types_gobelins[theme][i]["vitesse"] = base["vitesse"]
+
+types_boss = {
+    "troll": {
+        "taille": 150, "hp": 800, "score": 2000, "argent": 80,
+        "vitesse": 2, "degats_joueur": 0.15, "degats_obj": 0,
+        "teinte": (100, 200, 80),
+        "nom": "Flamme-Mere",
+        "capacite": "invocateur",
+        "distance_arret": 350,   # s'arrête loin du joueur
+        "desc": "Invoque des mobs et garde ses distances"
+    },
+    "chamane": {
+        "taille": 120, "hp": 600, "score": 3000, "argent": 100,
+        "vitesse": 4, "degats_joueur": 0.5, "degats_obj": 0,
+        "teinte": (180, 80, 220),
+        "nom": "Spectre de Feu",
+        "capacite": "assassin",
+        "distance_arret": 40,    # colle au joueur
+        "desc": "Agile, corps a corps, se stunt facilement"
+    },
+    "roi": {
+        "taille": 180, "hp": 1200, "score": 5000, "argent": 200,
+        "vitesse": 2, "degats_joueur": 0.12, "degats_obj": 0,
+        "teinte": (200, 150, 0),
+        "nom": "Roi des Flammes",
+        "capacite": "commandant",
+        "distance_arret": 120,
+        "desc": "Commande ses troupes, se regenere, frappe fort"
+    },
+    "desert": {
+        "taille": 160, "hp": 1500, "score": 4000, "argent": 150,
+        "vitesse": 3, "degats_joueur": 0.20, "degats_obj": 0,
+        "teinte": (230, 190, 100),
+        "nom": "Colosse des Sables",
+        "capacite": "assassin",
+        "distance_arret": 50,
+        "desc": "Rapide et imprévisible, il fonce dans le tas."
+    },
+    "ile": {
+        "taille": 170, "hp": 2200, "score": 6000, "argent": 250,
+        "vitesse": 2, "degats_joueur": 0.25, "degats_obj": 0,
+        "teinte": (0, 150, 200),
+        "nom": "Kraken Terrestre",
+        "capacite": "invocateur",
+        "distance_arret": 250,
+        "desc": "Invoque des tentacules et reste à mi-distance."
+    },
+    "montagne": {
+        "taille": 200, "hp": 3500, "score": 8500, "argent": 400,
+        "vitesse": 1, "degats_joueur": 0.40, "degats_obj": 0,
+        "teinte": (200, 200, 220),
+        "nom": "Yéti Ancestral",
+        "capacite": "commandant",
+        "distance_arret": 100,
+        "desc": "Lent mais massif, il possède une défense de fer."
+    },
+    "espace": {
+        "taille": 150, "hp": 5000, "score": 12000, "argent": 600,
+        "vitesse": 4, "degats_joueur": 0.50, "degats_obj": 0,
+        "teinte": (100, 0, 255),
+        "nom": "Seigneur Galactique",
+        "capacite": "assassin",
+        "distance_arret": 150,
+        "desc": "Maître de la gravité, très rapide et extrêmement dangereux."
+    },
+    }
+
+boss_timer_capacite = 0
+type_gobelin_actuel = "foret"
+
+couleurs = [
+    (255, 0, 0),
+    (0, 255, 0),
+    (255, 255, 0),
+    (0, 0, 255),
+    (255, 255, 255)
+]
+
+ennemis = []
+particules = deque()
+degats_flottants = deque()
+
+timer_ennemi = 0
+delai_ennemi = 90
+scroll_sel_niveau = 0
+scroll_shop = 0
+
+timer_difficulte = 0
+horloge = pygame.time.Clock()
+timer_visuel_attaque = 0
+
+_cone_cache = {"key": None, "points": None}
+
+# ============================================================
+# VARIABLES POUR LES EFFETS SPECIAUX DES ARMES
+# ============================================================
+
+# Compteur de combo pour le poing (remis a 0 si on n'attaque pas pendant 90 frames)
+combo_poing = 0
+timer_combo_poing = 0
+
+# Surcharge (foudre) : timer qui compte le temps depuis la derniere attaque
+# Si timer_surcharge >= 120 frames (2 secondes), le prochain coup fait x2 degats
+timer_surcharge = 0
+surcharge_prete = False
+
+# --- FUREUR SANGUINE (katana) ---
+fureur_stacks = 0          # stacks actifs (max 5)
+timer_fureur  = 0          # frames restantes avant perte des stacks
+DUREE_FUREUR  = 300        # 5 secondes a 60 fps
+
+# Liste des effets de statut actifs sur les ennemis
+# Chaque element : {"cible": ennemi, "type": str, "duree": int, "degats": float}
+effets_statut = []
+
+# Message flash a afficher a l'ecran (onde de choc, combo, surcharge...)
+message_effet = ""
+timer_message_effet = 0
+
+# ============================================================
+# MODE INFINI - variables
+# ============================================================
+
+mode_infini = False
+numero_vague_infinie = 0
+argent_infini = 0
+boosts_actifs = []
+boosts_proposes = []
+boutons_boosts = []
+boutons_shop_infini = {}
+bouton_shop_infini = None
+bouton_passer_boost = None
+bouton_retour_shop_infini = None
+timer_cooldown_arbre = 0
+
+# ============================================================
+# BULLES DE BONUS
+# ============================================================
+bulles = []
+timer_spawn_bulle = 0
+DELAI_SPAWN_BULLE = 300  # une bulle toutes les 5 secondes environ
+
+TYPES_BULLES = [
+    {"type": "soin",   "couleur": (80, 255, 120),  "valeur": 15, "label": "+15 HP"},
+    {"type": "degats", "couleur": (255, 200, 50),   "valeur": 0.20, "label": "+20% DMG"},
+]
+
+# Boost de dégâts temporaire (bulle dorée)
+boost_degats_bulle = 1.0
+timer_boost_degats_bulle = 0
+DUREE_BOOST_DEGATS_BULLE = 300  # 5 secondes à 60 fps
+
+# ============================================================
+# LISTE DES BOOSTS (mode infini)
+# ============================================================
+LISTE_BOOSTS = [
+    # Boosts normaux
+    {"nom": "Degats +15%",      "desc": "+15% de degats sur toutes les armes",   "type": "degats",   "valeur": 0.15},
+    {"nom": "Portee +15%",      "desc": "+15% de portee d'attaque",              "type": "portee",   "valeur": 0.15},
+    {"nom": "Angle +20%",       "desc": "Cone d'attaque plus large",             "type": "angle",    "valeur": 0.20},
+    {"nom": "Vitesse attaque",  "desc": "Cooldown reduit de 15%",                "type": "cooldown", "valeur": 0.15},
+    {"nom": "Sprint +1",        "desc": "+1 de deplacement",                     "type": "vitesse",  "valeur": 1},
+    {"nom": "HP Max +15",       "desc": "+15 PV maximum + soin complet",         "type": "hp_max",   "valeur": 15},
+    {"nom": "Soin 25 HP",       "desc": "Restaure 25 PV immediatement",          "type": "soin",     "valeur": 25},
+    {"nom": "Armure +10%",      "desc": "Reduit les degats recus de 10%",        "type": "armure",   "valeur": 0.10},
+    {"nom": "Vampire",          "desc": "25% de chance de soigner 2 HP/kill",   "type": "vampire",  "valeur": 2},
+    {"nom": "Magnetisme",       "desc": "+15 pieces bonus par vague",            "type": "magnet",   "valeur": 15},
+    {"nom": "Double Frappe",    "desc": "30% de chance de frapper 2 fois",       "type": "double",   "valeur": 1},
+    # Boosts rares (apparaissent toutes les 3 vagues)
+    {"nom": "RARE Degats +30%", "desc": "+30% de degats",                        "type": "degats",   "valeur": 0.30, "rare": True},
+    {"nom": "RARE Portee +25%", "desc": "+25% de portee",                        "type": "portee",   "valeur": 0.25, "rare": True},
+    {"nom": "RARE Angle +40%",  "desc": "Cone enormement elargi",                "type": "angle",    "valeur": 0.40, "rare": True},
+    {"nom": "RARE Soin +50 HP", "desc": "Restaure 50 PV immediatement",          "type": "soin",     "valeur": 50,   "rare": True},
+    {"nom": "RARE Berserk",     "desc": "+30% degats mais -8 HP max",            "type": "berserk",  "valeur": 0.30, "rare": True},
+    {"nom": "RARE Vitesse x2",  "desc": "Cooldown reduit de 30% !",              "type": "cooldown", "valeur": 0.30, "rare": True},
+    {"nom": "RARE Fortifie",    "desc": "+30 HP max et +20% armure",             "type": "fortifie", "valeur": 30,   "rare": True},
+]
+
+# Prix des armes dans le shop du mode infini (un peu moins cher que l'histoire)
+PRIX_ARMES_INFINI = {
+    "gourdin":  30,
+    "dague":    80,
+    "epee":     120,
+    "faux":     180,
+    "lance":    220,
+    "hache":    280,
+    "trident":  400,
+    "arbalete": 350,
+    "marteau":  500,
+    "foudre":   800,
+    "katana":   900,
+}
+
+armes_infini = {a: False for a in ARMES_SHOP}
+
+mult_degats   = 1.0
+mult_portee   = 1.0
+mult_angle    = 1.0
+bonus_vitesse = 0
+mult_cooldown = 1.0
+mult_armure   = 1.0
+bonus_vampire       = 0
+chance_vampire      = 0
+bonus_magnet        = 0
+chance_double       = 0
+double_frappe       = False
+
+# ============================================================
+# SYSTEME DE LORE
+# ============================================================
+LORE_NIVEAUX = {
+    5: {"titre": "Une colère artificielle", "lignes": [
+            "Ces flammes ne dansent pas normalement. Elles n'obéissent pas aux lois de la nature.",
+            "C'est comme si le feu lui-même était devenu un esclave, forcé de consumer tout ce qu'il touche.",
+            "En les éteignant, je n'ai pas l'impression de combattre un incendie...",
+            "J'ai l'impression de libérer une force primordiale qui n'a jamais voulu faire de mal."
+        ]},
+
+    10: {"titre": "La cicatrice thermique", "lignes": [
+            "Le feu a fini son travail d'extraction. Il a tout aspiré : l'humidité, la sève, la vie.",
+            "Leurs machines ont utilisé la chaleur pour vider la terre de sa substance.",
+            "Ce désert qui s'étend désormais devant moi n'est pas naturel.",
+            "C'est la cendre froide d'une région qui a été littéralement pompée jusqu'à la dernière goutte."
+        ]},
+
+    15: {"titre": "Parasitage", "lignes": [
+        "Même ici, dans les zones les plus reculées du désert, aucune bête n'est épargnée.",
+        "Les aliens injectent des nanorobots dans le système nerveux de la faune locale.",
+        "C'est une stratégie lâche : nous forcer à détruire notre propre écosystème.",
+        "Ils économisent leurs troupes en utilisant nos propres alliés naturels contre nous."
+        ]},
+
+    20: {"titre": "Le signal de l'île", "lignes": [
+            "L'environnement change brutalement. Leurs extracteurs sont maintenant concentrés au milieu d'un immense lac.",
+            "Nous avons réussi à décoder une transmission provenant de l'île.",
+            "Ce n'est pas un ordre d'attaque. C'est un signal de détresse.",
+            "Leurs troupes semblent agir dans l'urgence. Ils ont désespérément besoin de cette énergie, et vite."
+        ]},
+
+    25: {"titre": "Souffrance silencieuse", "lignes": [
+            "Le signal intercepté sur l'île confirme mes craintes.",
+            "Les créatures que je croise hurlent, mais ce n'est pas un cri de guerre, c'est un cri de douleur.",
+            "Leur corps ne supporte pas l'énergie pure que les aliens leur injectent.",
+            "En les tuant, je ne fais que mettre fin à leur calvaire. C'est une piètre consolation."
+        ]},
+
+    30: {"titre": "La vérité au sommet", "lignes": [
+            "En piratant cette base en haute montagne, leurs fichiers sont enfin clairs.",
+            "Leur planète d'origine est en train de mourir. Leur soleil s'éteint.",
+            "Ils volent l'énergie de notre Terre pour tenter de sauver leur propre monde du gel.",
+            "Mais s'ils activent le relais situé à ce sommet, c'est notre planète qui s'éteindra à sa place."
+        ]},
+
+    35: {"titre": "L'usine à viande", "lignes": [
+            "Au sommet de ces montagnes, j'ai trouvé des cuves de gestation.",
+            "Ils ne se contentent plus de posséder les animaux, ils les modifient génétiquement.",
+            "Ils créent des hybrides monstrueux, dépourvus de conscience, juste pour servir de chair à canon.",
+            "L'éthique n'existe plus pour une espèce qui refuse de mourir."
+        ]},
+
+    40: {"titre": "Orbite", "lignes": [
+            "Vous avez infiltré leur vaisseau-mère en orbite terrestre.",
+            "Leurs réserves sont presque vides. C'est leur flotte de la dernière chance.",
+            "Il n'y a pas assez d'énergie pour sauver nos deux mondes à la fois.",
+            "C'est eux ou nous. Vous devez détruire leur noyau central avant qu'ils n'achèvent le transfert."
+        ]},
+
+    45: {"titre": "L'ombre des maîtres", "lignes": [
+            "Dans les couloirs du vaisseau-mère, l'atmosphère change.",
+            "Je ne croise plus d'animaux terrestres modifiés. Les décors deviennent froids, métalliques.",
+            "Je commence à voir des silhouettes qui ne ressemblent à rien de connu sur Terre.",
+            "Ils ont épuisé leur stock de 'boucliers biologiques'. Ils vont devoir sortir de l'ombre."
+        ]},
+
+    50: {"titre": "Fin de transmission", "lignes": [
+            "Le vaisseau-mère est hors tension. La menace extraterrestre est définitivement neutralisée.",
+            "L'énergie confisquée est relâchée dans l'atmosphère et commence déjà à régénérer la Terre.",
+            "Nous avons sauvé notre foyer, mais cela a coûté la survie de leur espèce.",
+            "La mission est accomplie. La planète est de nouveau en sécurité."
+        ]},
+
+    51: {"titre": "Le vrai visage de l'ennemi", "lignes": [
+            "Les voilà enfin. Leurs réels corps.",
+            "Fini les animaux possédés, fini d'utiliser des innocents pour mener leur sale guerre.",
+            "Ils se tiennent devant moi, vulnérables derrière leur technologie avancée.",
+            "C'est étrange... maintenant qu'ils n'ont plus d'otages pour les protéger, je ne ressens plus aucune hésitation."
+        ]}
+}
+lore_actif = None        # None ou dict du lore en cours
+lore_index_lettre = 0    # pour l'effet machine à écrire
+lore_timer = 0           # vitesse d'apparition
+lore_ligne_actuelle = 0  # quelle ligne est en train de s'afficher
+lore_texte_complet = False  # True si tout le texte est apparu
+
+
+def choisir_boosts():
+    """Tire au sort 3 boosts a proposer au joueur apres chaque vague."""
+    global boosts_proposes
+    boosts_normaux = [b for b in LISTE_BOOSTS if not b.get("rare", False)]
+    boosts_rares   = [b for b in LISTE_BOOSTS if b.get("rare", False)]
+
+    pool = boosts_normaux[:]
+    # Un boost rare apparait tous les 3 vagues
+    if numero_vague_infinie % 3 == 0:
+        pool = pool + boosts_rares
+
+    boosts_proposes = random.sample(pool, min(3, len(pool)))
+
+
+def appliquer_boost(boost):
+    """Applique l'effet du boost choisi par le joueur."""
+    global mult_degats, mult_portee, mult_angle, bonus_vitesse
+    global mult_cooldown, mult_armure, bonus_vampire, bonus_magnet, double_frappe
+
+    if boost["type"] == "degats":
+        mult_degats = mult_degats * (1 + boost["valeur"])
+
+    elif boost["type"] == "portee":
+        mult_portee = mult_portee * (1 + boost["valeur"])
+
+    elif boost["type"] == "angle":
+        mult_angle = mult_angle * (1 + boost["valeur"])
+
+    elif boost["type"] == "vitesse":
+        bonus_vitesse = bonus_vitesse + boost["valeur"]
+
+    elif boost["type"] == "hp_max":
+        joueur["hp_max"] = joueur["hp_max"] + boost["valeur"]
+        joueur["hp"] = joueur["hp_max"]
+
+    elif boost["type"] == "cooldown":
+        mult_cooldown = mult_cooldown * (1 - boost["valeur"])
+
+    elif boost["type"] == "soin":
+        joueur["hp"] = joueur["hp"] + boost["valeur"]
+        if joueur["hp"] > joueur["hp_max"]:
+            joueur["hp"] = joueur["hp_max"]
+
+    elif boost["type"] == "armure":
+        mult_armure = mult_armure * (1 - boost["valeur"])
+
+    elif boost["type"] == "vampire":
+        bonus_vampire = bonus_vampire + boost["valeur"]
+
+    elif boost["type"] == "magnet":
+        bonus_magnet = bonus_magnet + boost["valeur"]
+
+    elif boost["type"] == "double":
+        double_frappe = True
+
+    elif boost["type"] == "berserk":
+        mult_degats = mult_degats * (1 + boost["valeur"])
+        joueur["hp_max"] = joueur["hp_max"] - 8
+        if joueur["hp_max"] < 10:
+            joueur["hp_max"] = 10
+        if joueur["hp"] > joueur["hp_max"]:
+            joueur["hp"] = joueur["hp_max"]
+
+    elif boost["type"] == "fortifie":
+        # Boost rare : +30 HP max ET +20% armure
+        joueur["hp_max"] = joueur["hp_max"] + boost["valeur"]
+        joueur["hp"] = joueur["hp_max"]
+        mult_armure = mult_armure * 0.80
+
+    boosts_actifs.append(boost)
+
+
+def lancer_nouvelle_vague_infinie():
+    """
+    Lance la prochaine vague du mode infini.
+    La difficulte augmente progressivement.
+    Un boss apparait toutes les 5 vagues.
+    """
+    global numero_vague_infinie, ennemis_spawnes_vague, ennemis_tues_vague
+    global ennemis_par_vague, delai_ennemi, nb_vagues_total, vague_actuelle
+    global boss_actif, boss_spawne, boss_type_niveau, timer_ennemi, argent_infini
+
+    numero_vague_infinie = numero_vague_infinie + 1
+
+    # Difficulte : +8% par vague (plus doux que +10%, laisse plus de temps au joueur)
+    difficulte = 1.0 + (numero_vague_infinie - 1) * 0.08
+
+    # Nombre d'ennemis : commence a 8, +2 par vague, plafond a 40
+    ennemis_par_vague = min(40, 8 + numero_vague_infinie * 2)
+
+    # Delai entre spawns : commence a 120 et descend jusqu'a 35
+    delai_ennemi = max(35, 120 - numero_vague_infinie * 4)
+
+    # Une seule vague par round en mode infini
+    nb_vagues_total = 1
+    vague_actuelle  = 1
+
+    ennemis_spawnes_vague = 0
+    ennemis_tues_vague    = 0
+    timer_ennemi          = 0
+    boss_actif            = None
+    boss_spawne           = False
+
+    # Boss toutes les 5 vagues
+    if numero_vague_infinie % 5 == 0:
+        if numero_vague_infinie == 5:
+            boss_type_niveau = "troll"
+        elif numero_vague_infinie == 10:
+            boss_type_niveau = "chamane"
+        elif numero_vague_infinie == 15:
+            boss_type_niveau = "roi"
+        else:
+            boss_type_niveau = random.choice(["troll", "chamane", "roi"])
+    else:
+        boss_type_niveau = None
+
+    # Scaling des ennemis depuis les stats de base
+    for i in range(len(types_gobelins["foret"])):
+        base = STATS_BASE_GOBELINS["foret"][i]
+        types_gobelins["foret"][i]["hp"]      = int(base["hp"]      * difficulte)
+        types_gobelins["foret"][i]["degats"]  =     base["degats"]  * difficulte
+
+        # Vitesse : +1 tous les 5 vagues (encore plus progressif), plafond a 7
+        nouvelle_vitesse = base["vitesse"] + numero_vague_infinie // 5
+        if nouvelle_vitesse > 7:
+            nouvelle_vitesse = 7
+        types_gobelins["foret"][i]["vitesse"] = nouvelle_vitesse
+
+    # Le magnetisme donne des pieces bonus au debut de chaque vague
+    if bonus_magnet > 0:
+        argent_infini = argent_infini + bonus_magnet
+
+    # Soin partiel entre les vagues : +5 HP (encourage a continuer)
+    joueur["hp"] = min(joueur["hp_max"], joueur["hp"] + 5)
+
+    ennemis.clear()
+    particules.clear()
+    degats_flottants.clear()
+
+
+def initialiser_mode_infini():
+    """Remet tout a zero et demarre un nouveau run infini."""
+    global mode_infini, numero_vague_infinie, argent_infini
+    global boosts_actifs, boosts_proposes, armes_infini
+    global mult_degats, mult_portee, mult_angle, bonus_vitesse
+    global mult_cooldown, mult_armure, bonus_vampire, bonus_magnet
+    global double_frappe, arme_actuelle, fureur_stacks, timer_fureur
+
+    mode_infini           = True
+    numero_vague_infinie  = 0
+    argent_infini         = 0
+    boosts_actifs         = []
+    boosts_proposes       = []
+    arme_actuelle         = "poing"
+
+    armes_infini = {a: False for a in ARMES_SHOP}
+
+    # Reset de tous les multiplicateurs
+    mult_degats   = 1.0
+    mult_portee   = 1.0
+    mult_angle    = 1.0
+    bonus_vitesse = 0
+    mult_cooldown = 1.0
+    mult_armure   = 1.0
+    bonus_vampire = 0
+    bonus_magnet  = 0
+    fureur_stacks = 0
+    timer_fureur  = 0
+    double_frappe = False
+
+
+    # Reset du joueur
+    joueur["hp_max"]  = 60
+    joueur["hp"]      = 60
+    joueur["vitesse"] = 5
+
+    reinitialiser_stats_gobelins()
+
+    charger_niveau(1)
+    lancer_nouvelle_vague_infinie()
+
+# ============================================================
+# FIN MODE INFINI
+# ============================================================
+
+def get_bonus_competences():
+    bonus = {
+        "hp_max_bonus":  competences["sante"]["niveau"]   * competences["sante"]["bonus_par_niveau"],
+        "mult_defense":  max(0.10, 1.0 - competences["defense"]["niveau"] * competences["defense"]["bonus_par_niveau"]),
+        "mult_degats":   1.0 + competences["degats"]["niveau"]  * competences["degats"]["bonus_par_niveau"],
+        "bonus_vitesse": competences["vitesse"]["niveau"] * competences["vitesse"]["bonus_par_niveau"],
+    }
+    return bonus
+
+def cout_prochain_niveau(comp, cle=""):
+    niv = comp["niveau"]
+    plafond = max_debloque_competence(cle) if cle else comp["max"]
+    if niv < comp["max"] and niv < plafond:
+        return comp["couts"][niv]
+    return 0
+
+def charger_niveau(numero):
+    global delai_ennemi, score, ennemis, vitesse, vague_actuelle
+    global nb_vagues_total, ennemis_par_vague
+    global ennemis_spawnes_vague, ennemis_tues_vague, boss_actif, boss_spawne
+    global boss_anim_spawn, boss_type_niveau, objectif, timer_spawn_bulle, timer_boost_degats_bulle, boost_degats_bulle
+
+    niveau = niveaux[numero - 1]
+    
+    # 1. On détermine le bon thème
+    if numero <= 10:
+        nouveau_theme = "foret"
+    elif numero <= 20:
+        nouveau_theme = "desert"
+    elif numero <= 30:
+        nouveau_theme = "ile"
+    elif numero <= 40:
+        nouveau_theme = "montagne"
+    elif numero <= 50:
+        nouveau_theme = "espace"
+        
+    # 2. ON APPELLE TA FONCTION (C'est elle qui met à jour les tuiles ET les sprites d'ennemis !)
+    changer_theme(nouveau_theme)
+
+    # 3. On initialise la suite du niveau...
+    vague_actuelle = 1
+    nb_vagues_total = niveau["nb_vagues"]
+    ennemis_par_vague = niveau["ennemis_par_vague"]
+    ennemis_spawnes_vague = 0
+    ennemis_tues_vague = 0
+    boss_actif = None
+    boss_spawne = False
+    boss_anim_spawn = 0
+    boss_type_niveau = niveau["boss"]
+    objectif = nb_vagues_total
+
+    delai_ennemi = niveau["delai_ennemi"]
+    vitesse = niveau["vitesse"]
+    score = 0
+    ennemis.clear()
+    particules.clear()
+    degats_flottants.clear()
+    bulles.clear()
+    timer_spawn_bulle = 0
+    boost_degats_bulle = 1.0
+    timer_boost_degats_bulle = 0
+
+    bonus = get_bonus_competences()
+    joueur["hp_max"] = 60 + bonus["hp_max_bonus"]
+    joueur["hp"] = joueur["hp_max"]
+    joueur["x"] = 1984
+    joueur["y"] = 1088
+    joueur["direction"] = "devant"
+    joueur["frame_actuelle"] = 0
+    joueur["timer_anim"] = 0
+    joueur["en_mouvement"] = False
+
+    objectifs_points[0]["x"] = 1984
+    objectifs_points[0]["y"] = 1088
+    objectifs_points[0]["hp_max"] = joueur["hp_max"] * 6
+    objectifs_points[0]["hp"] = objectifs_points[0]["hp_max"]
+
+    if hasattr(afficher, "_timer_niveau_gagne"):
+        afficher._timer_niveau_gagne = 0
+
+    jouer_musique(nouveau_theme)
+    _precalcul_spawns()
+
+def button(color, txt, pos_x, pos_y, width, height, color_txt, font, around=0):
+    rect = pygame.draw.rect(surface_jeu, color, [int(pos_x*SCALE), int(pos_y*SCALE), int(width*SCALE), int(height*SCALE)])
+    txt_button = font.render(txt, True, color_txt)
+    pos_txt = txt_button.get_rect()
+    pos_txt.center = rect.center
+    surface_jeu.blit(txt_button, pos_txt)
+    if around != 0:
+        pygame.draw.rect(surface_jeu, color, [int(pos_x*SCALE), int(pos_y*SCALE), int(width*SCALE), int(height*SCALE)], around)
+    return rect
+
+def ennemi_colore(image, couleur):
+    img = image.copy()
+    img.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)
+    return img
+
+carte_actuelle = 'foret'
+def calcul_camera(joueur, carte_actuelle):
+    cam_x = joueur["x"] - screen_width // 2
+    cam_y = joueur["y"] - screen_height // 2
+    if not carte_actuelle or not carte_actuelle[0]:
+        return max(0, cam_x), max(0, cam_y)
+    largeur_carte = len(carte_actuelle[0]) * TAILLE_TUILE
+    hauteur_carte = len(carte_actuelle) * TAILLE_TUILE
+    max_cam_x = max(0, largeur_carte - screen_width)
+    max_cam_y = max(0, hauteur_carte - screen_height)
+    cam_x = max(0, min(cam_x, max_cam_x))
+    cam_y = max(0, min(cam_y, max_cam_y))
+    return cam_x, cam_y
+
+_spawns_cache = []
+
+def _precalcul_spawns():
+    global _spawns_cache
+    _spawns_cache = []
+    for y_map, ligne in enumerate(carte_actuelle):
+        for x_map, tuile in enumerate(ligne):
+            if tuile == 3:
+                _spawns_cache.append((x_map, y_map))
+
+def creer_bulle():
+    """Fait apparaître une bulle de bonus aléatoire près du centre de la carte."""
+    if not carte_actuelle or not carte_actuelle[0]:
+        return
+    largeur_carte = len(carte_actuelle[0]) * TAILLE_TUILE
+    hauteur_carte = len(carte_actuelle) * TAILLE_TUILE
+    cx = largeur_carte // 2
+    cy = hauteur_carte // 2
+
+    # Zone de spawn : carré de 400px autour du centre
+    rayon = 700
+    for _ in range(20):  # 20 tentatives pour trouver une case libre
+        x = cx + random.randint(-rayon, rayon)
+        y = cy + random.randint(-rayon, rayon)
+        col = int(x / TAILLE_TUILE)
+        lig = int(y / TAILLE_TUILE)
+        if 0 <= lig < len(carte_actuelle) and 0 <= col < len(carte_actuelle[0]):
+            if carte_actuelle[lig][col] not in SOLIDES:
+                config = random.choice(TYPES_BULLES)
+                if config["type"] == "soin":
+                    label_affiche = f"+{max(1, int(joueur['hp_max'] * 0.07))} HP"
+                else:
+                    label_affiche = config["label"]
+                bulles.append({
+                    "x": x, "y": y,
+                    "type": config["type"],
+                    "couleur": config["couleur"],
+                    "valeur": config["valeur"],
+                    "label": label_affiche,
+                    "rayon": 18,
+                    "timer_pulse": random.randint(0, 60),  # déphasage visuel
+                    "duree_vie": 600,  # disparaît après 10 secondes si non ramassée
+                })
+                return
+            
+def mettre_a_jour_bulles():
+    global bulles, timer_spawn_bulle, boost_degats_bulle, timer_boost_degats_bulle
+
+    # Spawn périodique (seulement pendant une vague active)
+    if ennemis_spawnes_vague > 0 or len(ennemis) > 0:
+        timer_spawn_bulle += 1
+        if timer_spawn_bulle >= DELAI_SPAWN_BULLE:
+            timer_spawn_bulle = 0
+            if len(bulles) < 4:  # max 4 bulles à la fois
+                creer_bulle()
+
+    # Timer du boost de dégâts (bulle dorée)
+    if timer_boost_degats_bulle > 0:
+        timer_boost_degats_bulle -= 1
+        if timer_boost_degats_bulle == 0:
+            boost_degats_bulle = 1.0  # le boost expire
+
+    nouvelles_bulles = []
+    for b in bulles:
+        b["timer_pulse"] += 1
+        b["duree_vie"] -= 1
+
+        if b["duree_vie"] <= 0:
+            continue  # la bulle disparaît
+
+        # Collision avec le joueur (rayon 30px)
+        dx = joueur["x"] - b["x"]
+        dy = joueur["y"] - b["y"]
+        if dx*dx + dy*dy < (b["rayon"] + 30) ** 2:
+            # Ramassée !
+            if b["type"] == "soin":
+                soin = max(1, int(joueur["hp_max"] * 0.07))
+                joueur["hp"] = min(joueur["hp_max"], joueur["hp"] + soin)
+                objectifs_points[0]["hp"] = min(
+                    objectifs_points[0]["hp_max"],
+                    objectifs_points[0]["hp"] + soin // 2
+                )
+                b["label"] = f"+{soin} HP"
+                degats_flottants.append({
+                    "x": b["x"], "y": b["y"] - 20,
+                    "texte": f"+{soin} HP (10%)", "duree": 50,
+                    "couleur": (80, 255, 120)
+                })
+            elif b["type"] == "degats":
+                boost_degats_bulle = 1.0 + b["valeur"]
+                timer_boost_degats_bulle = DUREE_BOOST_DEGATS_BULLE
+                degats_flottants.append({
+                    "x": b["x"], "y": b["y"] - 20,
+                    "texte": b["label"], "duree": 50,
+                    "couleur": (255, 200, 50)
+                })
+            # Particules de ramassage
+            for _ in range(10):
+                particules.append({
+                    "x": b["x"], "y": b["y"],
+                    "vx": random.uniform(-4, 4),
+                    "vy": random.uniform(-5, 0),
+                    "duree": random.randint(15, 30),
+                    "couleur": b["couleur"]
+                })
+            continue  # ne pas garder la bulle
+
+        nouvelles_bulles.append(b)
+
+    bulles.clear()
+    for b in nouvelles_bulles:
+        bulles.append(b)
+theme_actuel = "foret"
+MAX_ENNEMIS = 50
+
+def creer_ennemi():
+    global ennemis
+
+    if len(ennemis) >= MAX_ENNEMIS:
+        return
+
+    liste_disponible = types_gobelins[type_gobelin_actuel]
+    poids = [m["poids"] for m in liste_disponible]
+    config = random.choices(liste_disponible, weights=poids, k=1)[0]
+
+    # Bonus de difficulté après les niveaux boss (5, 8, 11...)
+    niveaux_boss = [4, 7, 10, 12, 14, 16, 18, 20]
+    bonus_post_boss = 0.3 if numero_niveau - 1 in niveaux_boss else 0.0
+    mult = 1.0 + (numero_niveau - 1) * 0.15 + bonus_post_boss
+
+    if _spawns_cache:
+        col, lig = random.choice(_spawns_cache)
+        x = col * TAILLE_TUILE
+        y = lig * TAILLE_TUILE
+    else:
+        x = 500
+        y = 500
+
+    taille_sprite = int(config["taille"] * SCALE)
+
+    if config["type"] == "feu":
+        teintes_feu = [(255, 180, 100), (255, 100, 50), (220, 50, 50), (150, 0, 0)]
+        teinte = teintes_feu[liste_disponible.index(config)] if config in liste_disponible else (255, 100, 50)
+    elif config["type"] == "sable":
+        teintes_sable = [(240, 220, 150), (200, 160, 80), (160, 120, 40), (120, 80, 20)]
+        teinte = teintes_sable[liste_disponible.index(config)] if config in liste_disponible else (200, 160, 80)
+    elif config["type"] == "eau":
+        teintes_eau = [(100, 180, 255), (50, 120, 220), (30, 80, 180), (10, 40, 130)]
+        teinte = teintes_eau[liste_disponible.index(config)] if config in liste_disponible else (100, 180, 255)
+    elif config["type"] == "glace":
+        teintes_glace = [(200, 230, 255), (160, 200, 240), (120, 170, 220), (80, 130, 200)]
+        teinte = teintes_glace[liste_disponible.index(config)] if config in liste_disponible else (200, 230, 255)
+    elif config["type"] == "plasma":
+        teintes_plasma = [(200, 50, 255), (150, 0, 220), (100, 0, 180), (60, 0, 140)]
+        teinte = teintes_plasma[liste_disponible.index(config)] if config in liste_disponible else (200, 50, 255)
+    else:
+        teinte = (255, 255, 255)
+
+    source_frames = frames_ennemi_par_theme.get(theme_actuel, frames_ennemi_feu)
+
+    frames_precalculees = {}
+    for direction, liste_frames in source_frames.items():
+        frames_precalculees[direction] = []
+        for frame in liste_frames:
+            f = pygame.transform.smoothscale(frame, (taille_sprite, taille_sprite))
+            f = ennemi_colore(f, teinte)
+            frames_precalculees[direction].append(f)
+
+    img_base = source_frames["devant"][0].copy()
+    img_base = pygame.transform.smoothscale(img_base, (taille_sprite, taille_sprite))
+    img_finale = ennemi_colore(img_base, teinte)
+
+    nouveau_ennemi = {
+        "x": x, "y": y,
+        "img": img_finale,
+        "taille_sprite": taille_sprite,
+        "teinte": teinte,
+        "frames": frames_precalculees,
+        "hp": int(config["hp"] * mult),
+        "hp_max": int(config["hp"] * mult),
+        "type": config["type"],
+        "score": config["score"],
+        "argent": int(config["argent"] * mult),
+        "vitesse": config["vitesse"] + (numero_niveau - 1) // 4,
+        "degats": config["degats"] * mult,
+        "timer_anim": random.randint(0, 20),
+        "frame_actuelle": 0,
+        "direction": "devant",
+        "timer_hit": 0,
+        "taille_spawn": 0,
+        "en_spawn": True,
+    }
+
+    ennemis.append(nouveau_ennemi)
+
+def creer_boss(type_boss):
+    global boss_actif, boss_anim_spawn
+    config = types_boss[type_boss]
+    mult = 1.0 + (numero_vague_infinie - 1) * 0.08 if mode_infini else 1.0 + (numero_niveau - 1) * 0.1
+
+    if _spawns_cache:
+        col, lig = random.choice(_spawns_cache)
+        x, y = col * TAILLE_TUILE, lig * TAILLE_TUILE
+    else:
+        x, y = 1984, 800
+
+# Frames selon le type
+    if type_boss == "troll":
+        frames_b = frames_boss_feu1
+        taille = 150
+    elif type_boss == "chamane":
+        frames_b = frames_boss_feu2
+        taille = 120
+    elif type_boss == "roi":
+        frames_b = frames_boss_feu3
+        taille = 180
+    elif type_boss == "desert":
+        frames_b = frames_boss_desert
+        taille = 160
+    elif type_boss == "ile":
+        frames_b = frames_boss_ile
+        taille = 170
+    elif type_boss == "montagne":
+        frames_b = frames_boss_montagne
+        taille = 200
+    elif type_boss == "espace":
+        frames_b = frames_boss_espace
+        taille = 150
+    else:
+        # Sécurité au cas où
+        frames_b = frames_boss_feu1
+        taille = 150
+    
+    boss_actif = {
+        "x": x, "y": y,
+        "type": type_boss,
+        "nom": config["nom"],
+        "capacite": config["capacite"],
+        "taille_sprite": taille,
+        "teinte": config["teinte"],
+        "frames": frames_b,
+        "hp": int(config["hp"] * mult),
+        "hp_max": int(config["hp"] * mult),
+        "score": config["score"],
+        "argent": int(config["argent"] * mult),
+        "vitesse": config["vitesse"],
+        "degats_joueur": config["degats_joueur"] * mult,
+        "frame_actuelle": 0,
+        "timer_anim": 0,
+        "direction": "devant",
+        "timer_hit": 0,
+        "en_spawn": True,
+        "taille_spawn": 0,
+        "timer_charge": 0,
+        "regen_timer": 0,
+        "stun_timer": 0,
+        "timer_spawn_mob": 0,
+        "phase": "chasse",
+        "timer_phase": 0, 
+        "distance_arret": config.get("distance_arret", 100),
+        "etat_anim": "walk",
+    }
+    boss_anim_spawn = 0
+
+# --- MOTEUR DE CARTE ---
+tile_size = TAILLE_TUILE
+screen_width = l
+screen_height = h
+
+def changer_theme(nouveau_theme):
+    global theme_actuel, images_tuiles, carte_actuelle, frames_ennemi_actuel, type_gobelin_actuel
+
+    theme_actuel = nouveau_theme
+    type_gobelin_actuel = nouveau_theme
+    images_tuiles = images_tuiles_themes[theme_actuel]
+    carte_actuelle = charger_ma_carte(maps[theme_actuel])
+    frames_ennemi_actuel = frames_ennemi_par_theme[theme_actuel]
+    _precalcul_spawns()
+
+    chemin_musique = musiques_themes.get(theme_actuel)
+    if chemin_musique and os.path.exists(chemin_musique):
+        pygame.mixer.music.load(chemin_musique)
+        pygame.mixer.music.play(-1)
+
+images_tuiles_themes = {}
+
+
+def charger_tuiles_theme(theme):
+    tuiles = {}
+    if theme == "foret":
+        tuiles[0]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/herbe.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[1]  = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[1].fill((120, 120, 120))
+        tuiles[4]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/arbre_bas.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[5]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/arbre_haut.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[6]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/fleurs_rouges.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[7]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/fleurs_blanches.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[8]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/fleurs_bleues.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[9]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/basse_herbe.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[10] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/haute_herbe.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+    elif theme == "desert":
+        tuiles[0]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/sable.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[1]  = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[1].fill((180, 140, 60))  # mur sable
+        tuiles[4]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/arbre_mort_bas.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[5]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/arbre_mort_haut.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[6]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/cactus_jaune.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[7]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/cactus_rouge.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[8]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/cactus2.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[9]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/cactus3.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[10] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/cactus.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[11] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/sable2.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+    elif theme == "ile":
+        tuiles[4]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/eau.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[1]  = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[1].fill((180, 140, 60))
+        tuiles[0]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_coin_bas_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[5]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_coin_bas_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[6]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_coin_haut_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[7]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_coin_haut_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[8]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[9]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[10] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_coin_bas_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[15] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_foret/herbe.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[12] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_coin_bas_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[13] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_coin_haut_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[14] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_coin_haut_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[11]  = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_desert/sable.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[16] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_bas.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[17] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/herbe_haut.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[18] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_gauche.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[19] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_droit.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[20] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_haut.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[21] = pygame.transform.smoothscale(pygame.image.load("images/Images_map/map_ile/sable_bas.png").convert_alpha(), (TAILLE_TUILE, TAILLE_TUILE))
+    elif theme == "montagne":
+        sol = pygame.transform.smoothscale(pygame.image.load("images/images_map/map_montagne/neige.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[0] = sol   # sol principal après remap
+        tuiles[1] = pygame.transform.smoothscale(pygame.image.load("images/images_map/map_montagne/pierre.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[5] = pygame.transform.smoothscale(pygame.image.load("images/images_map/map_montagne/caillou1.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[6] = pygame.transform.smoothscale(pygame.image.load("images/images_map/map_montagne/caillou2.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        tuiles[7] = pygame.transform.smoothscale(pygame.image.load("images/images_map/map_montagne/caillou3.png").convert(), (TAILLE_TUILE, TAILLE_TUILE))
+        for k in range(30):
+            if k not in tuiles:
+                tuiles[k] = sol
+    elif theme == "espace":
+        tuiles[0] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[0].fill((10, 10, 30))   # vide spatial
+        tuiles[1] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[1].fill((30, 0, 60))    # mur violet
+        tuiles[3] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[3].fill((10, 10, 30))
+        tuiles[4] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[4].fill((20, 20, 50))   # obstacle bas
+        tuiles[5] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[5].fill((40, 0, 80))    # obstacle haut
+        tuiles[6] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[6].fill((0, 200, 255))  # cristal bleu
+        tuiles[7] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[7].fill((150, 0, 255))  # cristal violet
+        tuiles[8] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[8].fill((255, 50, 200)) # cristal rose
+        tuiles[9] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[9].fill((0, 255, 150))  # cristal vert
+        tuiles[10] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[10].fill((50, 50, 100)) # plateforme
+        tuiles[11] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[11].fill((200, 200, 0)) # metal
+    # tuiles communes a tous les themes
+    if 2 not in tuiles:
+        tuiles[2] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[2].fill((255, 215, 0))
+    if 3 not in tuiles:
+        tuiles[3] = pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)).convert(); tuiles[3].fill((139, 0, 0))
+    return tuiles
+
+# Charge les deux themes au demarrage pour eviter les lags en jeu
+images_tuiles_themes["foret"]  = charger_tuiles_theme("foret")
+images_tuiles_themes["desert"] = charger_tuiles_theme("desert")
+images_tuiles_themes["ile"]      = charger_tuiles_theme("ile")
+images_tuiles_themes["montagne"] = charger_tuiles_theme("montagne")
+images_tuiles_themes["espace"]   = charger_tuiles_theme("espace")
+
+# Variable globale active (pointe vers le theme courant)
+images_tuiles = images_tuiles_themes["foret"]
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+spritesheet_ennemi_feu = pygame.image.load("images/image_animation/ennemi_feu.png").convert_alpha()
+spritesheet_ennemi_desert = pygame.image.load("images/image_animation/ennemi_desert.png").convert_alpha()
+spritesheet_ennemi_montagne = pygame.image.load("images/image_animation/ennemi_montagne.png").convert_alpha()
+spritesheet_joueur = pygame.image.load("images/image_animation/joueur.png").convert_alpha()
+FRAME_W = 64
+FRAME_H = 64
+FRAME_W_J = 128
+FRAME_H_J = 128
+NB_FRAMES = 4
+NB_FRAMES_MARCHE = 6
+NB_FRAMES_ACTION = 4
+frames_ennemi_feu = {}
+frames_joueur = {}
+directions = ["devant", "dos", "gauche", "droite"]
+frames_ennemi_actuel = frames_ennemi_feu
+for col, direction in enumerate(directions):
+    frames_ennemi_feu[direction] = []
+    for row in range(NB_FRAMES):
+        frame = spritesheet_ennemi_feu.subsurface((col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H))
+        frame = pygame.transform.smoothscale(frame, (96, 96))
+        frames_ennemi_feu[direction].append(frame)
+
+frames_joueur["devant"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 3 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["devant"].append(frame)
+
+frames_joueur["droite"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 4 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["droite"].append(frame)
+frames_joueur["gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["droite"]]
+
+frames_joueur["dos"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 5 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["dos"].append(frame)
+
+frames_joueur["idle_devant"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 0 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["idle_devant"].append(frame)
+
+frames_joueur["idle_droite"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 1 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["idle_droite"].append(frame)
+frames_joueur["idle_gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["idle_droite"]]
+
+frames_joueur["idle_dos"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 2 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["idle_dos"].append(frame)
+
+frames_joueur["attaque_devant"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 6 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["attaque_devant"].append(frame)
+
+frames_joueur["attaque_droite"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 7 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["attaque_droite"].append(frame)
+frames_joueur["attaque_gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["attaque_droite"]]
+
+frames_joueur["attaque_dos"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 8 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (96, 96))
+    frames_joueur["attaque_dos"].append(frame)
+
+spritesheet_boss_feu1 = pygame.image.load("images/image_animation/boss_feu1.png").convert_alpha()
+FRAME_W_BF1 = spritesheet_boss_feu1.get_width() // 5
+FRAME_H_BF1 = spritesheet_boss_feu1.get_height()
+frames_boss_feu1 = {
+    "walk": [],
+    "hit": []
+}
+# Animation normale : 5 frames sur la ligne principale
+for i in range(5):
+    f = spritesheet_boss_feu1.subsurface((i * FRAME_W_BF1, 0, FRAME_W_BF1, FRAME_H_BF1))
+    frames_boss_feu1["walk"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+# Animation hit : fichier séparé
+spritesheet_hit_boss_feu1 = pygame.image.load("images/image_animation/hit_boss_feu1.png").convert_alpha()
+FRAME_W_HBF1 = spritesheet_hit_boss_feu1.get_width() // 3
+FRAME_H_HBF1 = spritesheet_hit_boss_feu1.get_height()
+for i in range(3):
+    f = spritesheet_hit_boss_feu1.subsurface((i * FRAME_W_HBF1, 0, FRAME_W_HBF1, FRAME_H_HBF1))
+    frames_boss_feu1["hit"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_boss_feu2 = pygame.image.load("images/image_animation/boss_feu2.png").convert_alpha()
+FRAME_W_BC = spritesheet_boss_feu2.get_width() // 4
+FRAME_H_BC = spritesheet_boss_feu2.get_height() // 7
+
+frames_boss_feu2 = {
+    "devant": [], "dos": [], "gauche": [], "droite": [],
+    "attaque_devant": [], "attaque_dos": [], "attaque_gauche": [], "attaque_droite": [],
+    "jump": [], "mort": []
+}
+
+directions_map = {"devant": 0, "dos": 1, "gauche": 2, "droite": 3}
+
+for direction, col in directions_map.items():
+    for lig in range(4): # On prend les 4 premières lignes
+        rect = (col * FRAME_W_BC, lig * FRAME_H_BC, FRAME_W_BC, FRAME_H_BC)
+        f = spritesheet_boss_feu2.subsurface(rect)
+        frames_boss_feu2[direction].append(pygame.transform.smoothscale(f, (120, 120)))
+
+directions_attaque_bc = ["attaque_devant", "attaque_dos", "attaque_gauche", "attaque_droite"]
+for col, cle in enumerate(directions_attaque_bc):
+    rect = (col * FRAME_W_BC, 4 * FRAME_H_BC, FRAME_W_BC, FRAME_H_BC)
+    f = spritesheet_boss_feu2.subsurface(rect)
+    frames_boss_feu2[cle].append(pygame.transform.smoothscale(f, (120, 120)))
+
+for col in range(4):
+    rect = (col * FRAME_W_BC, 5 * FRAME_H_BC, FRAME_W_BC, FRAME_H_BC)
+    f = spritesheet_boss_feu2.subsurface(rect)
+    frames_boss_feu2["jump"].append(pygame.transform.smoothscale(f, (120, 120)))
+
+f = spritesheet_boss_feu2.subsurface((0, 6 * FRAME_H_BC, FRAME_W_BC, FRAME_H_BC))
+frames_boss_feu2["mort"].append(pygame.transform.smoothscale(f, (120, 120)))
+
+spritesheet_boss_feu3_idle = pygame.image.load("images/image_animation/boss_feu3.png").convert_alpha()
+spritesheet_boss_feu3_walk = pygame.image.load("images/image_animation/walk_boss_feu3.png").convert_alpha()
+spritesheet_boss_feu3_hit  = pygame.image.load("images/image_animation/hit_boss_feu3.png").convert_alpha()
+
+FRAME_W_BF3_IDLE = spritesheet_boss_feu3_idle.get_width() // 5
+FRAME_H_BF3_IDLE = spritesheet_boss_feu3_idle.get_height()
+FRAME_W_BF3_WALK = spritesheet_boss_feu3_walk.get_width() // 6
+FRAME_H_BF3_WALK = spritesheet_boss_feu3_walk.get_height()
+FRAME_W_BF3_HIT  = spritesheet_boss_feu3_hit.get_width() // 3
+FRAME_H_BF3_HIT  = spritesheet_boss_feu3_hit.get_height()
+
+frames_boss_feu3 = {"idle": [], "walk": [], "hit": []}
+for i in range(5):
+    f = spritesheet_boss_feu3_idle.subsurface((i * FRAME_W_BF3_IDLE, 0, FRAME_W_BF3_IDLE, FRAME_H_BF3_IDLE))
+    frames_boss_feu3["idle"].append(pygame.transform.smoothscale(f, (180, 180)))
+for i in range(6):
+    f = spritesheet_boss_feu3_walk.subsurface((i * FRAME_W_BF3_WALK, 0, FRAME_W_BF3_WALK, FRAME_H_BF3_WALK))
+    frames_boss_feu3["walk"].append(pygame.transform.smoothscale(f, (180, 180)))
+for i in range(3):
+    f = spritesheet_boss_feu3_hit.subsurface((i * FRAME_W_BF3_HIT, 0, FRAME_W_BF3_HIT, FRAME_H_BF3_HIT))
+    frames_boss_feu3["hit"].append(pygame.transform.smoothscale(f, (180, 180)))
+
+frames_ennemi_desert = {}
+for col, direction in enumerate(directions):
+    frames_ennemi_desert[direction] = []
+    for row in range(NB_FRAMES):
+        frame = spritesheet_ennemi_desert.subsurface((col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H))
+        frame = pygame.transform.smoothscale(frame, (96, 96))
+        frames_ennemi_desert[direction].append(frame)
+
+frames_ennemi_montagne = {}
+for col, direction in enumerate(directions):
+    frames_ennemi_montagne[direction] = []
+    for row in range(NB_FRAMES):
+        frame = spritesheet_ennemi_montagne.subsurface((col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H))
+        frame = pygame.transform.smoothscale(frame, (96, 96))
+        frames_ennemi_montagne[direction].append(frame)
+
+def _charger_frames_theme(chemin):
+    sheet = pygame.image.load(chemin).convert_alpha()
+    frames = {}
+    for col, direction in enumerate(directions):
+        frames[direction] = []
+        for row in range(NB_FRAMES):
+            frame = sheet.subsurface((col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H))
+            frame = pygame.transform.smoothscale(frame, (96, 96))
+            frames[direction].append(frame)
+    return frames
+
+spritesheet_boss_desert = pygame.image.load("images/image_animation/boss_desert.png").convert_alpha()
+FRAME_W_BD = spritesheet_boss_desert.get_width() // 5
+FRAME_H_BD = spritesheet_boss_desert.get_height()
+frames_boss_desert = {"walk": [], "hit": []}
+
+for i in range(5):
+    f = spritesheet_boss_desert.subsurface((i * FRAME_W_BD, 0, FRAME_W_BD, FRAME_H_BD))
+    frames_boss_desert["walk"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_hit_boss_desert = pygame.image.load("images/image_animation/hit_boss_desert.png").convert_alpha()
+FRAME_W_HBD = spritesheet_hit_boss_desert.get_width() // 3
+FRAME_H_HBD = spritesheet_hit_boss_desert.get_height()
+for i in range(3):
+    f = spritesheet_hit_boss_desert.subsurface((i * FRAME_W_HBD, 0, FRAME_W_HBD, FRAME_H_HBD))
+    frames_boss_desert["hit"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+
+spritesheet_boss_ile = pygame.image.load("images/image_animation/boss_ile.png").convert_alpha()
+FRAME_W_BI = spritesheet_boss_ile.get_width() // 5
+FRAME_H_BI = spritesheet_boss_ile.get_height()
+frames_boss_ile = {"walk": [], "hit": []}
+
+for i in range(5):
+    f = spritesheet_boss_ile.subsurface((i * FRAME_W_BI, 0, FRAME_W_BI, FRAME_H_BI))
+    frames_boss_ile["walk"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_hit_boss_ile = pygame.image.load("images/image_animation/hit_boss_ile.png").convert_alpha()
+FRAME_W_HBI = spritesheet_hit_boss_ile.get_width() // 3
+FRAME_H_HBI = spritesheet_hit_boss_ile.get_height()
+for i in range(3):
+    f = spritesheet_hit_boss_ile.subsurface((i * FRAME_W_HBI, 0, FRAME_W_HBI, FRAME_H_HBI))
+    frames_boss_ile["hit"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+
+spritesheet_boss_montagne = pygame.image.load("images/image_animation/boss_montagne.png").convert_alpha()
+FRAME_W_BM = spritesheet_boss_montagne.get_width() // 5
+FRAME_H_BM = spritesheet_boss_montagne.get_height()
+frames_boss_montagne = {"walk": [], "hit": []}
+
+for i in range(5):
+    f = spritesheet_boss_montagne.subsurface((i * FRAME_W_BM, 0, FRAME_W_BM, FRAME_H_BM))
+    frames_boss_montagne["walk"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_hit_boss_montagne = pygame.image.load("images/image_animation/hit_boss_montagne.png").convert_alpha()
+FRAME_W_HBM = spritesheet_hit_boss_montagne.get_width() // 3
+FRAME_H_HBM = spritesheet_hit_boss_montagne.get_height()
+for i in range(3):
+    f = spritesheet_hit_boss_montagne.subsurface((i * FRAME_W_HBM, 0, FRAME_W_HBM, FRAME_H_HBM))
+    frames_boss_montagne["hit"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_boss_espace = pygame.image.load("images/image_animation/boss_espace.png").convert_alpha()
+FRAME_W_BE = spritesheet_boss_espace.get_width() // 5
+FRAME_H_BE = spritesheet_boss_espace.get_height()
+frames_boss_espace = {"walk": [], "hit": []}
+
+for i in range(5):
+    f = spritesheet_boss_espace.subsurface((i * FRAME_W_BE, 0, FRAME_W_BE, FRAME_H_BE))
+    frames_boss_espace["walk"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+spritesheet_hit_boss_espace = pygame.image.load("images/image_animation/hit_boss_espace.png").convert_alpha()
+FRAME_W_HBE = spritesheet_hit_boss_espace.get_width() // 3
+FRAME_H_HBE = spritesheet_hit_boss_espace.get_height()
+for i in range(3):
+    f = spritesheet_hit_boss_espace.subsurface((i * FRAME_W_HBE, 0, FRAME_W_HBE, FRAME_H_HBE))
+    frames_boss_espace["hit"].append(pygame.transform.smoothscale(f, (150, 150)))
+
+frames_ennemi_ile      = _charger_frames_theme("images/image_animation/ennemi_ile.png")
+frames_ennemi_montagne = _charger_frames_theme("images/image_animation/ennemi_montagne.png")
+frames_ennemi_espace   = _charger_frames_theme("images/image_animation/ennemi_espace.png")
+
+frames_ennemi_par_theme = {
+    "foret": frames_ennemi_feu,
+    "desert": frames_ennemi_desert,
+    "ile": frames_ennemi_ile,
+    "montagne": frames_ennemi_montagne,
+    "espace": frames_ennemi_espace,
+}
+
+print("Theme actuel :", theme_actuel)
+print("Frames utilisées :", frames_ennemi_par_theme.get(theme_actuel))
+
+def verifier_changement_theme():
+    if numero_niveau >= 41 and theme_actuel != "espace":
+        changer_theme("espace")
+    elif 31 <= numero_niveau <= 40 and theme_actuel != "montagne":
+        changer_theme("montagne")
+    elif 21 <= numero_niveau <= 30 and theme_actuel != "ile":
+        changer_theme("ile")
+    elif 11 <= numero_niveau <= 20 and theme_actuel != "desert":
+        changer_theme("desert")
+    elif numero_niveau <= 10 and theme_actuel != "foret":
+        changer_theme("foret")
+
+
+def charger_ma_carte(nom_fichier):
+    if nom_fichier == "map_espace.txt":
+        nb_cols = 62
+        nb_lignes = 32
+        # 0 = vide traversable, 1 = mur solide, 3 = spawn ennemi
+        carte = [[0] * nb_cols for _ in range(nb_lignes)]
+
+        # --- Murs périmétriques ---
+        for col in range(nb_cols):
+            carte[0][col] = 1
+            carte[nb_lignes - 1][col] = 1
+        for lig in range(nb_lignes):
+            carte[lig][0] = 1
+            carte[lig][nb_cols - 1] = 1
+
+        # --- Blocs d'obstacles intérieurs (astéroïdes / plateformes spatiales) ---
+        blocs = [
+            # format : (lig_debut, col_debut, hauteur, largeur)
+            (4,  8,  3, 4),   # bloc NW
+            (4,  25, 3, 5),   # bloc N centre-gauche
+            (4,  42, 3, 4),   # bloc N centre-droit
+            (4,  52, 3, 4),   # bloc NE
+            (10, 5,  4, 3),   # bloc W haut
+            (10, 15, 3, 6),   # couloir horizontal haut-gauche
+            (10, 32, 4, 4),   # centre
+            (10, 45, 3, 6),   # couloir horizontal haut-droit
+            (10, 55, 4, 3),   # bloc E haut
+            (16, 8,  3, 4),   # bloc W milieu
+            (16, 20, 4, 3),   # pilier milieu-gauche
+            (16, 38, 4, 3),   # pilier milieu-droit
+            (16, 52, 3, 4),   # bloc E milieu
+            (22, 12, 3, 5),   # bloc SW
+            (22, 28, 3, 6),   # bloc S centre
+            (22, 48, 3, 5),   # bloc SE
+            (26, 5,  3, 4),   # coin bas-gauche
+            (26, 53, 3, 4),   # coin bas-droit
+        ]
+        for (lig_d, col_d, haut, larg) in blocs:
+            for dl in range(haut):
+                for dc in range(larg):
+                    lig = lig_d + dl
+                    col = col_d + dc
+                    if 0 < lig < nb_lignes - 1 and 0 < col < nb_cols - 1:
+                        carte[lig][col] = 1
+
+        # --- Points de spawn répartis dans les zones libres ---
+        spawns = [
+            (2, 2),   (2, 15),  (2, 30),  (2, 45),  (2, 59),
+            (8, 10),  (8, 35),  (8, 55),
+            (14, 2),  (14, 25), (14, 50), (14, 59),
+            (20, 5),  (20, 22), (20, 40), (20, 58),
+            (29, 2),  (29, 20), (29, 40), (29, 59),
+        ]
+        for col, lig in spawns:
+            if 0 < lig < nb_lignes and 0 < col < nb_cols:
+                if carte[lig][col] == 0:
+                    carte[lig][col] = 3
+        return carte
+    
+    if nom_fichier is None:
+        return [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
+    chemin_fichier = os.path.join(BASE_DIR, nom_fichier)
+    if not os.path.exists(chemin_fichier):
+        print(f"ALERTE : Le fichier {chemin_fichier} n'existe pas !")
+        return [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
+    matrice = []
+    with open(chemin_fichier, "r") as f:
+        for ligne in f:
+            ligne_propre = ligne.strip()
+            if ligne_propre:
+                matrice.append([int(n) for n in ligne_propre.split(",")])
+    
+    if nom_fichier == "map_montagne.txt":
+        for lig in range(len(matrice)):
+            for col in range(len(matrice[lig])):
+                if matrice[lig][col] == 4:
+                    matrice[lig][col] = 0  # devient sol traversable
+    
+    return matrice
+
+
+
+portee_effective = joueur["portee_attaque"]
+
+_precalcul_spawns()
+
+def _spawner_mob_autour_boss(b):
+    """Crée un ennemi aléatoire dans un rayon autour du boss."""
+    angle_r = random.uniform(0, 2 * math.pi)
+    rayon = random.randint(80, 200)
+    x = b["x"] + math.cos(angle_r) * rayon
+    y = b["y"] + math.sin(angle_r) * rayon
+    # Crée un gobelin simple (le plus petit) au point calculé
+    liste_disponible = types_gobelins[type_gobelin_actuel]
+    config = liste_disponible[random.randint(0, 1)]  # petit ou moyen seulement
+    mult = 1.0 + (numero_vague_infinie - 1) * 0.08 if mode_infini else 1.0 + (numero_niveau - 1) * 0.1
+    taille_sprite = config["taille"]
+    teinte = (255, 180, 100)
+    frames_precalculees = {}
+
+    source_frames_boss = frames_ennemi_par_theme.get(theme_actuel, frames_ennemi_feu)
+    for direction, liste_frames in source_frames_boss.items():
+        frames_precalculees[direction] = []
+        for frame in liste_frames:
+            f = pygame.transform.smoothscale(frame, (taille_sprite, taille_sprite))
+            f = ennemi_colore(f, teinte)
+            frames_precalculees[direction].append(f)
+    ennemis.append({
+        "x": x, "y": y,
+        "img": frames_precalculees["devant"][0],
+        "taille_sprite": taille_sprite, "teinte": teinte,
+        "frames": frames_precalculees,
+        "hp": int(config["hp"] * mult), "hp_max": int(config["hp"] * mult),
+        "type": config["type"], "score": config["score"] // 2,
+        "argent": 1, "vitesse": config["vitesse"],
+        "degats": config["degats"] * mult,
+        "timer_anim": random.randint(0, 20), "frame_actuelle": 0,
+        "direction": "devant", "timer_hit": 0,
+        "taille_spawn": 0, "en_spawn": True,
+    })
+
+def _mort_boss():
+    global boss_actif, score, argent, argent_infini
+    b = boss_actif
+    score += b["score"]
+    if mode_infini:
+        argent_infini += b["argent"] * 2
+    else:
+        argent += b["argent"]
+    for _ in range(25):
+        particules.append({
+            "x": b["x"] + random.randint(-50, 50),
+            "y": b["y"] + random.randint(-50, 50),
+            "vx": random.uniform(-6, 6), "vy": random.uniform(-7, 0),
+            "duree": random.randint(25, 50), "couleur": b["teinte"]
+        })
+    boss_actif = None
+
+def logique_boss():
+    global boss_actif, score, argent, argent_infini, boss_timer_capacite
+
+    if boss_actif is None:
+        return
+
+    if boss_actif["en_spawn"]:
+        boss_actif["taille_spawn"] += 4
+        if boss_actif["taille_spawn"] >= boss_actif["taille_sprite"]:
+            boss_actif["taille_spawn"] = boss_actif["taille_sprite"]
+            boss_actif["en_spawn"] = False
+        return
+
+    j_x, j_y = joueur["x"], joueur["y"]
+    b = boss_actif
+    boss_timer_capacite += 1
+
+    dx_j = b["x"] - j_x
+    dy_j = b["y"] - j_y
+    dist_sq = dx_j * dx_j + dy_j * dy_j
+    dist = dist_sq ** 0.5
+
+    # --- STUN : le boss est immobilisé ---
+    if b["stun_timer"] > 0:
+        b["stun_timer"] -= 1
+        b["etat_anim"] = "hit"
+        # Animation même stunné
+        b["timer_anim"] += 1
+        if b["timer_anim"] >= 8:
+            b["timer_anim"] = 0
+            frames_list = b["frames"].get("hit", b["frames"].get("walk", list(b["frames"].values())[0]))
+            b["frame_actuelle"] = (b["frame_actuelle"] + 1) % len(frames_list)
+        if b["hp"] <= 0:
+            _mort_boss()
+        return
+
+    # --- Direction vers le joueur ---
+    if abs(dx_j) > abs(dy_j):
+        b["direction"] = "droite" if j_x > b["x"] else "gauche"
+    else:
+        b["direction"] = "devant" if j_y > b["y"] else "dos"
+
+    distance_arret = b.get("distance_arret", 100)
+
+    # ============================================================
+    # TROLL : Invocateur — garde ses distances, invoque des mobs
+    # ============================================================
+    if b["capacite"] == "invocateur":
+        # Phase : si joueur trop proche → recul
+        if dist < distance_arret:
+            b["phase"] = "recul"
+        elif dist > distance_arret + 100:
+            b["phase"] = "approche"
+        else:
+            b["phase"] = "invasion"  # bonne distance → invoque
+
+        if b["phase"] == "recul":
+            # S'éloigne du joueur
+            if dist > 0:
+                b["x"] -= (j_x - b["x"]) / dist * b["vitesse"]
+                b["y"] -= (j_y - b["y"]) / dist * b["vitesse"]
+            b["etat_anim"] = "walk"
+        elif b["phase"] == "approche":
+            # Se rapproche jusqu'à distance_arret
+            if dist > 0:
+                b["x"] += (j_x - b["x"]) / dist * b["vitesse"]
+                b["y"] += (j_y - b["y"]) / dist * b["vitesse"]
+            b["etat_anim"] = "walk"
+        else:
+            # Invasion : reste sur place et invoque
+            b["etat_anim"] = "idle" if "idle" in b["frames"] else "walk"
+
+        # Invoque des mobs toutes les 4 secondes
+        b["timer_spawn_mob"] += 1
+        if b["timer_spawn_mob"] >= 240:
+            b["timer_spawn_mob"] = 0
+            nb_a_spawner = random.randint(2, 4)
+            for _ in range(nb_a_spawner):
+                if len(ennemis) < MAX_ENNEMIS:
+                    _spawner_mob_autour_boss(b)
+
+        # Petits dégâts de contact seulement si très proche
+        if dist < 80:
+            joueur["hp"] -= b["degats_joueur"] * mult_armure
+
+    # ============================================================
+    # CHAMANE : Assassin — fonce sur le joueur, se fais stunt facilement
+    # ============================================================
+    elif b["capacite"] == "assassin":
+        b["timer_phase"] += 1
+
+        # Comportement : charge périodique puis pause
+        if b["phase"] == "chasse":
+            # Fonce vers le joueur
+            if dist > distance_arret and dist > 0:
+                vitesse_charge = b["vitesse"] + 2  # plus rapide que la normale
+                b["x"] += (j_x - b["x"]) / dist * vitesse_charge
+                b["y"] += (j_y - b["y"]) / dist * vitesse_charge
+            b["etat_anim"] = "walk"
+
+            # Dégâts au contact
+            if dist < 55:
+                joueur["hp"] -= b["degats_joueur"] * mult_armure
+
+            # Change de phase toutes les 3 secondes : courte pause
+            if b["timer_phase"] >= 180:
+                b["timer_phase"] = 0
+                b["phase"] = "pause"
+
+        elif b["phase"] == "pause":
+            # Petite pause avant de rechargez
+            b["etat_anim"] = "idle" if "idle" in b["frames"] else "walk"
+            if b["timer_phase"] >= 45:
+                b["timer_phase"] = 0
+                b["phase"] = "chasse"
+
+        # Stun : le chamane se stun si touché (géré dans faire_une_attaque,
+        # ici on juste décrémente le timer_hit → si timer_hit > 5 → stun déclenché)
+        if b["timer_hit"] >= 7:
+            b["stun_timer"] = 40  # 0.66 secondes de stun
+
+    # ============================================================
+    # ROI : Commandant — invoque, se régénère, frappe à mi-distance
+    # ============================================================
+    elif b["capacite"] == "commandant":
+        b["timer_phase"] += 1
+
+        if b["phase"] == "chasse":
+            # Se rapproche jusqu'à distance_arret
+            if dist > distance_arret and dist > 0:
+                b["x"] += (j_x - b["x"]) / dist * b["vitesse"]
+                b["y"] += (j_y - b["y"]) / dist * b["vitesse"]
+            b["etat_anim"] = "walk"
+
+            # Dégâts à distance_arret (frappe avec portée)
+            if dist < distance_arret + 20:
+                joueur["hp"] -= b["degats_joueur"] * mult_armure
+
+            # Alterne entre chasse et commandement
+            if b["timer_phase"] >= 300:
+                b["timer_phase"] = 0
+                b["phase"] = "commandement"
+
+        elif b["phase"] == "commandement":
+            # S'arrête, invoque des mobs et se régénère
+            b["etat_anim"] = "idle" if "idle" in b["frames"] else "walk"
+            b["regen_timer"] += 1
+            if b["regen_timer"] >= 20:  # regen rapide pendant la phase commandement
+                b["regen_timer"] = 0
+                b["hp"] = min(b["hp_max"], b["hp"] + 3)
+
+            b["timer_spawn_mob"] += 1
+            if b["timer_spawn_mob"] >= 90:
+                b["timer_spawn_mob"] = 0
+                if len(ennemis) < MAX_ENNEMIS:
+                    _spawner_mob_autour_boss(b)
+
+            if b["timer_phase"] >= 180:
+                b["timer_phase"] = 0
+                b["phase"] = "chasse"
+
+    # --- Animation commune ---
+    b["timer_anim"] += 1
+    if b["timer_anim"] >= 8:
+        b["timer_anim"] = 0
+        frames_list = b["frames"].get(b.get("etat_anim", "walk"), b["frames"].get("walk", list(b["frames"].values())[0]))
+        b["frame_actuelle"] = (b["frame_actuelle"] + 1) % max(1, len(frames_list))
+
+    if b["hp"] <= 0:
+        _mort_boss()
+
+maps = {
+    "foret":    "map_foret.txt",
+    "desert":   "map_desert.txt",
+    "ile":      "map_ile.txt",
+    "montagne": "map_montagne.txt",
+    "espace":   "map_espace.txt"
+}
+theme_actuel = "foret"
+changer_theme("foret")
+
+def logique_ennemis():
+    global continuer
+    DISTANCE_AGGRO = 400
+    DISTANCE_AGGRO_SQ = DISTANCE_AGGRO * DISTANCE_AGGRO
+
+    obj_x = objectifs_points[0]["x"]
+    obj_y = objectifs_points[0]["y"]
+    j_x = joueur["x"]
+    j_y = joueur["y"]
+
+    for ennemi in ennemis:
+        if ennemi["en_spawn"]:
+            ennemi["taille_spawn"] += 3
+            if ennemi["taille_spawn"] >= ennemi["taille_sprite"]:
+                ennemi["taille_spawn"] = ennemi["taille_sprite"]
+                ennemi["en_spawn"] = False
+            continue
+
+        dx_j = ennemi["x"] - j_x
+        dy_j = ennemi["y"] - j_y
+        dist_joueur_sq = dx_j * dx_j + dy_j * dy_j
+
+        if dist_joueur_sq < DISTANCE_AGGRO_SQ:
+            cible_x, cible_y = j_x, j_y
+        else:
+            cible_x, cible_y = obj_x, obj_y
+
+        bonus_comp = get_bonus_competences()
+        vitesse_joueur_actuelle = joueur["vitesse"] + (bonus_vitesse if mode_infini else bonus_comp["bonus_vitesse"])
+        spd = min(ennemi["vitesse"], vitesse_joueur_actuelle - 1)
+        if spd < 1:
+            spd = 1
+        if ennemi["x"] < cible_x:
+            ennemi["x"] += spd
+        elif ennemi["x"] > cible_x:
+            ennemi["x"] -= spd
+        if ennemi["y"] < cible_y:
+            ennemi["y"] += spd
+        elif ennemi["y"] > cible_y:
+            ennemi["y"] -= spd
+
+        dx_dir = cible_x - ennemi["x"]
+        dy_dir = cible_y - ennemi["y"]
+        if abs(dx_dir) > abs(dy_dir):
+            ennemi["direction"] = "droite" if dx_dir > 0 else "gauche"
+        else:
+            ennemi["direction"] = "devant" if dy_dir > 0 else "dos"
+
+        dx_o = ennemi["x"] - obj_x
+        dy_o = ennemi["y"] - obj_y
+        if dx_o * dx_o + dy_o * dy_o < 1600:
+            objectifs_points[0]["hp"] -= ennemi["degats"]
+
+        if dist_joueur_sq < 900:
+            bonus = get_bonus_competences()
+            joueur["hp"] -= ennemi["degats"] * 0.5 * mult_armure * bonus["mult_defense"]
+
+        col = int(ennemi["x"] / TAILLE_TUILE)
+        lig = int(ennemi["y"] / TAILLE_TUILE)
+        if 0 <= lig < len(carte_actuelle) and 0 <= col < len(carte_actuelle[0]):
+            if carte_actuelle[lig][col] == 1:
+                continue
+
+def deplacer_joueur():
+    touches = pygame.key.get_pressed()
+    dx, dy = 0, 0
+
+    bonus_comp = get_bonus_competences()
+    if mode_infini:
+        vitesse_joueur = joueur["vitesse"] + bonus_vitesse
+    else:
+        vitesse_joueur = joueur["vitesse"] + bonus_comp["bonus_vitesse"]
+
+    if touches[pygame.K_z]: dy -= vitesse_joueur
+    if touches[pygame.K_s]: dy += vitesse_joueur
+    if touches[pygame.K_q]: dx -= vitesse_joueur
+    if touches[pygame.K_d]: dx += vitesse_joueur
+
+    joueur["en_mouvement"] = (dx != 0 or dy != 0)
+
+    if dy < 0: joueur["direction"] = "dos"
+    elif dy > 0: joueur["direction"] = "devant"
+    if dx < 0: joueur["direction"] = "gauche"
+    elif dx > 0: joueur["direction"] = "droite"
+
+    if joueur["etat_anim"] == "attaque":
+        nb_frames = 4
+        vitesse_anim = 6
+        cle = f"attaque_{joueur['direction']}"
+    elif joueur["en_mouvement"]:
+        joueur["etat_anim"] = "marche"
+        nb_frames = 6
+        vitesse_anim = 8
+        cle = joueur["direction"]
+    else:
+        joueur["etat_anim"] = "idle"
+        nb_frames = 6
+        vitesse_anim = 20
+        cle = f"idle_{joueur['direction']}"
+
+    joueur["timer_anim"] += 1
+    if joueur["timer_anim"] >= vitesse_anim:
+        joueur["timer_anim"] = 0
+        joueur["frame_actuelle"] += 1
+        if joueur["frame_actuelle"] >= nb_frames:
+            joueur["frame_actuelle"] = 0
+            if joueur["etat_anim"] == "attaque":
+                joueur["etat_anim"] = "idle"
+
+    prochaine_col = int((joueur["x"] + dx) / TAILLE_TUILE)
+    prochaine_lig = int((joueur["y"] + dy) / TAILLE_TUILE)
+
+    collision = False
+    if 0 <= prochaine_lig < len(carte_actuelle) and 0 <= prochaine_col < len(carte_actuelle[0]):
+        if carte_actuelle[prochaine_lig][prochaine_col] in SOLIDES:
+            collision = True
+    if not collision:
+        joueur["x"] += dx
+        joueur["y"] += dy
+
+def appliquer_effet_statut(cible, type_effet, degats_par_tick, duree_ticks):
+    """
+    Ajoute un effet de statut (saignement, poison, ralentissement) sur une cible.
+    - cible : dictionnaire ennemi ou boss
+    - type_effet : "saignement", "poison", "ralentissement"
+    - degats_par_tick : degats infliges toutes les 30 frames
+    - duree_ticks : nombre de fois que l'effet se declenche (1 tick = 30 frames)
+    """
+    # Pour le ralentissement : on stocke la vitesse d'origine si ce n'est pas deja fait
+    if type_effet == "ralentissement":
+        if not cible.get("ralenti", False):
+            cible["vitesse_base"] = cible["vitesse"]
+            cible["vitesse"] = max(1, cible["vitesse"] // 2)
+            cible["ralenti"] = True
+
+    effets_statut.append({
+        "cible": cible,
+        "type": type_effet,
+        "degats": degats_par_tick,
+        "duree": duree_ticks,
+        "timer": 0
+    })
+
+
+def mettre_a_jour_effets_statut():
+    """
+    A appeler chaque frame dans mettre_a_jour().
+    Applique les degats des effets de statut et supprime les effets expires.
+    """
+    global effets_statut, score, argent, argent_infini
+    nouveaux_effets = []
+
+    for effet in effets_statut:
+        cible = effet["cible"]
+
+        # Verifie que la cible est encore en vie et dans le jeu
+        if cible not in ennemis and cible is not boss_actif:
+            # Si c'etait un ralentissement, pas besoin de restaurer la vitesse
+            continue
+
+        if cible.get("hp", 0) <= 0:
+            continue
+
+        effet["timer"] += 1
+
+        # Chaque 30 frames (~0.5 seconde), on applique les degats
+        if effet["timer"] >= 30:
+            effet["timer"] = 0
+            if effet["type"] in ("saignement", "poison"):
+                cible["hp"] -= effet["degats"]
+                cible["timer_hit"] = 5
+
+                # Couleur du texte selon l'effet
+                if effet["type"] == "saignement":
+                    couleur_txt = (220, 0, 0)
+                    suffixe = " saign."
+                else:
+                    couleur_txt = (80, 220, 80)
+                    suffixe = " poison"
+
+                degats_flottants.append({
+                    "x": cible["x"] + random.randint(-15, 15),
+                    "y": cible["y"] - 30,
+                    "texte": f"-{int(effet['degats'])}{suffixe}",
+                    "duree": 30,
+                    "couleur": couleur_txt
+                })
+
+                # Si la cible meurt a cause de l'effet
+                if cible["hp"] <= 0 and cible in ennemis:
+                    ennemis.remove(cible)
+                    score += cible["score"]
+                    if mode_infini:
+                        argent_infini += cible["argent"]
+                    else:
+                        argent += cible["argent"]
+                    for _ in range(6):
+                        particules.append({
+                            "x": cible["x"], "y": cible["y"],
+                            "vx": random.uniform(-3, 3),
+                            "vy": random.uniform(-4, 0),
+                            "duree": random.randint(15, 25),
+                            "couleur": cible["teinte"]
+                        })
+                    continue  # Cible morte, on ne garde pas l'effet
+
+            effet["duree"] -= 1
+            if effet["duree"] <= 0:
+                # L'effet expire : restaure la vitesse si c'etait un ralentissement
+                if effet["type"] == "ralentissement" and cible.get("ralenti", False):
+                    cible["vitesse"] = cible.get("vitesse_base", cible["vitesse"])
+                    cible["ralenti"] = False
+                continue
+
+        nouveaux_effets.append(effet)
+
+    effets_statut.clear()
+    for e in nouveaux_effets:
+        effets_statut.append(e)
+
+
+def faire_une_attaque(degats, portee, angle_max, dx_vise, dy_vise):
+    """
+    Effectue une attaque en cone et retourne la liste des ennemis tues.
+    Applique aussi les effets speciaux de l'arme courante.
+    """
+    global combo_poing, timer_combo_poing, message_effet, timer_message_effet
+    portee_sq = portee * portee
+    morts = []
+    ennemis_touches = []  # Liste de tous les ennemis touches (pas seulement les morts)
+
+    effet_arme = armes_stats[arme_actuelle].get("effet", "")
+
+    # --- Gestion du COMBO (poing) ---
+    # On incremente le compteur avant de frapper
+    if effet_arme == "combo":
+        combo_poing += 1
+        timer_combo_poing = 90  # 1.5 secondes pour continuer le combo
+        if combo_poing >= 3:
+            degats = degats * 1.5
+            combo_poing = 0
+            message_effet = "COMBO x1.5 !"
+            timer_message_effet = 60
+
+    for ennemi in ennemis:
+        vx = ennemi["x"] - joueur["x"]
+        vy = ennemi["y"] - joueur["y"]
+        dist_sq = vx * vx + vy * vy
+
+        if dist_sq > portee_sq:
+            continue
+        if dist_sq == 0:
+            continue
+
+        dist = dist_sq ** 0.5
+        vx /= dist
+        vy /= dist
+
+        dot = max(-1.0, min(1.0, dx_vise * vx + dy_vise * vy))
+        angle = math.degrees(math.acos(dot))
+
+        if angle < angle_max:
+            degats_reels = degats
+
+            # --- Bonus MARQUAGE : si l'ennemi est deja marque, il subit +50% de degats ---
+            # Le marquage est pose par la lance au coup precedent
+            if ennemi.get("marque", 0) > 0:
+                degats_reels = degats_reels * 1.5
+
+            # --- CRITIQUE (epee) : 25% de chance de doubler les degats ---
+            est_critique = False
+            if effet_arme == "critique" and random.random() < 0.25:
+                degats_reels = degats_reels * 2
+                est_critique = True
+
+            # --- ECRASEMENT (katana) : supprime, remplace par FUREUR ---
+            # (plus d'ecrasement)
+
+            # --- FUREUR SANGUINE (katana) : bonus de degats selon les stacks ---
+            if effet_arme == "fureur" and fureur_stacks > 0:
+                degats_reels = degats_reels * (1 + fureur_stacks * 0.15)
+
+            # --- SURCHARGE (foudre) : si le joueur a attendu 2 sec, degats x2 ---
+            if effet_arme == "surcharge" and surcharge_prete:
+                degats_reels = degats_reels * 2
+
+            ennemi["hp"] -= degats_reels
+            ennemi["timer_hit"] = 8
+            ennemis_touches.append(ennemi)
+
+            couleur_dmg = (255, 50, 50) if est_critique else (255, 200, 50)
+            texte_dmg = f"CRIT! {int(degats_reels)}" if est_critique else str(int(degats_reels))
+            degats_flottants.append({
+                "x": ennemi["x"] + random.randint(-10, 10),
+                "y": ennemi["y"] - 20,
+                "texte": texte_dmg,
+                "duree": 35,
+                "couleur": couleur_dmg
+            })
+
+            # --- RECUL (gourdin) : repousse l'ennemi ---
+            if effet_arme == "recul":
+                force_recul = 60
+                ennemi["x"] += dx_vise * force_recul
+                ennemi["y"] += dy_vise * force_recul
+
+            # --- RALENTISSEMENT (arbalete) : reduit la vitesse ---
+            if effet_arme == "ralentissement":
+                appliquer_effet_statut(ennemi, "ralentissement", 0, 6)
+
+            # --- SAIGNEMENT (dague, faux) ---
+            if effet_arme == "saignement":
+                dgts_saignement = degats * 0.15
+                appliquer_effet_statut(ennemi, "saignement", dgts_saignement, 4)
+
+            # --- POISON (trident) ---
+            if effet_arme == "poison":
+                dgts_poison = degats * 0.10
+                appliquer_effet_statut(ennemi, "poison", dgts_poison, 6)
+
+            # --- MARQUAGE (lance) : l'ennemi frappe recoit +50% de degats pendant 3 secondes ---
+            # On stocke le timer de marquage directement sur l'ennemi.
+            # La penalite est appliquee au prochain coup recu (voir plus bas dans la boucle).
+            if effet_arme == "marquage":
+                ennemi["marque"] = 180  # 180 frames = 3 secondes a 60 fps
+                degats_flottants.append({
+                    "x": ennemi["x"] + random.randint(-10, 10),
+                    "y": ennemi["y"] - 40,
+                    "texte": "MARQUE !",
+                    "duree": 40,
+                    "couleur": (255, 80, 200)
+                })
+
+            if ennemi["hp"] <= 0:
+                morts.append(ennemi)
+
+    # --- ONDE DE CHOC (marteau) : repousse TOUS les ennemis proches ---
+    if effet_arme == "onde" and ennemis_touches:
+        rayon_onde = 150
+        for e in ennemis:
+            dx_o = e["x"] - joueur["x"]
+            dy_o = e["y"] - joueur["y"]
+            dist_o = (dx_o**2 + dy_o**2) ** 0.5
+            if 0 < dist_o < rayon_onde:
+                force = 80 * (1 - dist_o / rayon_onde)
+                e["x"] += (dx_o / dist_o) * force
+                e["y"] += (dy_o / dist_o) * force
+        message_effet = "ONDE DE CHOC !"
+        timer_message_effet = 45
+
+    # --- Gestion du BOSS ---
+    if boss_actif and not boss_actif["en_spawn"]:
+        b = boss_actif
+        vx = b["x"] - joueur["x"]
+        vy = b["y"] - joueur["y"]
+        dist_sq = vx*vx + vy*vy
+        if 0 < dist_sq <= portee_sq:
+            dist = dist_sq ** 0.5
+            vx /= dist; vy /= dist
+            dot = max(-1.0, min(1.0, dx_vise*vx + dy_vise*vy))
+            if math.degrees(math.acos(dot)) < angle_max:
+                degats_boss = degats
+
+                # Critique sur boss
+                est_critique_boss = False
+                if effet_arme == "critique" and random.random() < 0.25:
+                    degats_boss = degats * 2
+                    est_critique_boss = True
+
+                # Marquage sur boss : bonus de degats si deja marque
+                if b.get("marque", 0) > 0:
+                    degats_boss = degats_boss * 1.5
+
+                # Fureur sur boss
+                if effet_arme == "fureur" and fureur_stacks > 0:
+                    degats_boss = degats_boss * (1 + fureur_stacks * 0.15)
+
+                b["hp"] -= degats_boss
+                b["timer_hit"] = 8
+                degats_flottants.append({
+                    "x": b["x"], "y": b["y"] - 30,
+                    "texte": f"CRIT! {int(degats_boss)}" if est_critique_boss else str(int(degats_boss)),
+                    "duree": 35,
+                    "couleur": (255, 50, 0) if est_critique_boss else (255, 100, 0)
+                })
+
+                # Recul sur boss (moins fort)
+                if effet_arme == "recul":
+                    b["x"] += dx_vise * 20
+                    b["y"] += dy_vise * 20
+
+                # Ralentissement sur boss
+                if effet_arme == "ralentissement":
+                    appliquer_effet_statut(b, "ralentissement", 0, 4)
+
+                # Saignement sur boss
+                if effet_arme == "saignement":
+                    appliquer_effet_statut(b, "saignement", degats * 0.10, 4)
+
+                # Poison sur boss
+                if effet_arme == "poison":
+                    appliquer_effet_statut(b, "poison", degats * 0.08, 6)
+
+                # Marquage sur boss
+                if effet_arme == "marquage":
+                    b["marque"] = 180
+
+    return morts
+
+
+def appliquer_mort_ennemi(m, morts):
+    """
+    Gere la mort d'un ennemi : score, argent, particules, et effet TRANCHANT (hache).
+    """
+    global score, argent, argent_infini, fureur_stacks, timer_fureur
+
+    if m in ennemis:
+        ennemis.remove(m)
+    score += m["score"]
+
+    # --- FUREUR SANGUINE (katana) : +1 stack par kill, max 5, reset timer ---
+    if armes_stats[arme_actuelle].get("effet") == "fureur":
+        if fureur_stacks < 5:
+            fureur_stacks += 1
+        timer_fureur = DUREE_FUREUR
+
+    if mode_infini:
+        argent_infini += m["argent"]
+    else:
+        argent += m["argent"]
+
+    # Boost vampire
+    if mode_infini and bonus_vampire > 0:
+        nb_stacks = len([b for b in boosts_actifs if b["type"] == "vampire"])
+        chance = nb_stacks * 0.25
+        if random.random() < chance:
+            joueur["hp"] = min(joueur["hp_max"], joueur["hp"] + bonus_vampire)
+
+    for _ in range(8):
+        particules.append({
+            "x": m["x"], "y": m["y"],
+            "vx": random.uniform(-3, 3),
+            "vy": random.uniform(-4, 0),
+            "duree": random.randint(15, 25),
+            "couleur": m["teinte"]
+        })
+
+    degats_flottants.append({
+        "x": m["x"], "y": m["y"] - 20,
+        "texte": str(m["hp_max"]),
+        "duree": 40,
+        "couleur": (255, 80, 80)
+    })
+
+    # --- TRANCHANT (hache) : l'ennemi explose et blesse ceux autour ---
+    if armes_stats[arme_actuelle].get("effet") == "tranchant":
+        rayon_explosion = 100
+        degats_explosion = armes_stats[arme_actuelle]["degats"] * 0.4
+        for autre in ennemis[:]:
+            if autre is m:
+                continue
+            dx_e = autre["x"] - m["x"]
+            dy_e = autre["y"] - m["y"]
+            if dx_e*dx_e + dy_e*dy_e < rayon_explosion**2:
+                autre["hp"] -= degats_explosion
+                autre["timer_hit"] = 6
+                degats_flottants.append({
+                    "x": autre["x"], "y": autre["y"] - 20,
+                    "texte": f"Explos. {int(degats_explosion)}", "duree": 30, "couleur": (255, 140, 0)
+                })
+                if autre["hp"] <= 0 and autre not in morts:
+                    morts.append(autre)
+        # Particules d'explosion
+        for _ in range(12):
+            particules.append({
+                "x": m["x"], "y": m["y"],
+                "vx": random.uniform(-6, 6),
+                "vy": random.uniform(-6, 1),
+                "duree": random.randint(10, 22),
+                "couleur": (255, 120, 0)
+            })
+
+    # --- PERFORATION (lance) : soigne legèrement si on perce plusieurs ennemis ---
+    # (pas de soin ici, c'est gere dans faire_une_attaque directement)
+
+
+def attaquer():
+    global score, argent, argent_infini, timer_visuel_attaque, timer_attaque
+    global combo_poing, timer_combo_poing, message_effet, timer_message_effet
+    global timer_surcharge, surcharge_prete, score_total, points_competences 
+
+    stats = armes_stats[arme_actuelle]
+
+    if timer_attaque > 0:
+        return
+
+    joueur["etat_anim"] = "attaque"
+    joueur["frame_actuelle"] = 0
+    joueur["timer_anim"] = 0
+
+    if mode_infini:
+        portee   = get_portee_arme(arme_actuelle) * mult_portee
+        degats   = get_degats_arme(arme_actuelle) * mult_degats * boost_degats_bulle
+        cooldown = int(get_cooldown_arme(arme_actuelle) * mult_cooldown)
+        if cooldown < 2:
+            cooldown = 2
+        angle_max = min(179, stats["angle"] * mult_angle)
+    else:
+        bonus_comp = get_bonus_competences()
+        portee    = get_portee_arme(arme_actuelle)
+        degats    = get_degats_arme(arme_actuelle) * bonus_comp["mult_degats"] * boost_degats_bulle
+        cooldown  = get_cooldown_arme(arme_actuelle)
+        angle_max = stats["angle"]
+
+    # --- SURCHARGE (foudre) : verifie si le timer est a 120 avant de frapper ---
+    surcharge_prete = (arme_actuelle == "foudre" and timer_surcharge >= 120)
+    if surcharge_prete:
+        message_effet = "SURCHARGE ! x2 DEGATS !"
+        timer_message_effet = 60
+    # On remet le timer a 0 apres avoir attaque
+    timer_surcharge = 0
+
+    # --- Reduction de cooldown katana a partir de 3 stacks de fureur ---
+    if arme_actuelle == "katana" and fureur_stacks >= 3:
+        reduction = (fureur_stacks - 2) * 0.05
+        cooldown  = max(2, int(cooldown * (1.0 - reduction)))
+
+    timer_attaque = cooldown
+    timer_visuel_attaque = 0
+
+    cam_x, cam_y = calcul_camera(joueur, carte_actuelle)
+    mx, my = souris_vers_jeu(pygame.mouse.get_pos())
+    mx += cam_x
+    my += cam_y
+
+    dx = mx - joueur["x"]
+    dy = my - joueur["y"]
+    distance = (dx**2 + dy**2) ** 0.5
+
+    if distance == 0:
+        return
+
+    dx /= distance
+    dy /= distance
+
+    morts = faire_une_attaque(degats, portee, angle_max, dx, dy)
+
+    # Double frappe mode infini
+    if mode_infini and double_frappe:
+        if random.random() < 0.30:
+            morts2 = faire_une_attaque(degats, portee, angle_max, dx, dy)
+            for m in morts2:
+                if m not in morts:
+                    morts.append(m)
+
+    ennemis_deja_traites = set()
+    for m in morts:
+        if id(m) not in ennemis_deja_traites:
+            ennemis_deja_traites.add(id(m))
+            appliquer_mort_ennemi(m, morts)
+
+def souris_vers_jeu(pos):
+    fenetre_largeur, fenetre_hauteur = ecran.get_size()
+    ratio_x = fenetre_largeur / l
+    ratio_y = fenetre_hauteur / h
+    ratio = min(ratio_x, ratio_y)
+    nouvelle_largeur = int(l * ratio)
+    nouvelle_hauteur = int(h * ratio)
+    offset_x = (fenetre_largeur - nouvelle_largeur) // 2
+    offset_y = (fenetre_hauteur - nouvelle_hauteur) // 2
+    x = (pos[0] - offset_x) / ratio
+    y = (pos[1] - offset_y) / ratio
+    return int(x), int(y)
+
+def s(val):
+    return int(val * SCALE)
+
+def gerer_evenements():
+    global continuer, etat, image_actuel, numero_niveau, slot_actuel, \
+           bouton_sel_niveau, bouton_sel_niveau_special, arme1_actuelle, \
+           arme2_actuelle, img_arme1, img_arme2, bouton_arme1, \
+           arme1_debloquee, argent, hp, ecran, \
+           bouton_save1, bouton_save2, bouton_save3, bouton_rejouer, bouton_menu_go, \
+           distance, derniere_pos_souris_jeu, bouton_suite, scroll_sel_niveau, \
+           scroll_shop, arme_actuelle, mode_infini, argent_infini, armes_infini, \
+           bouton_shop_infini, bouton_passer_boost, bouton_retour_shop_infini, \
+           boutons_boosts, boutons_shop_infini, bouton_arbre, scroll_arbre, \
+           points_competences, timer_cooldown_arbre, bouton_upgrade, \
+           lore_actif, lore_index_lettre, lore_texte_complet
+
+    for event in pygame.event.get():
+
+        if event.type == pygame.QUIT:
+            continuer = False
+
+        if event.type == pygame.VIDEORESIZE:
+            ecran = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+
+        if etat == "menu1":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_jouer and bouton_jouer.collidepoint(souris):
+                        etat = "sauvegardes"
+                    if bouton_credits and bouton_credits.collidepoint(souris):
+                        etat = "credits"
+                    if bouton_quitter and bouton_quitter.collidepoint(souris):
+                        continuer = False
+
+        if etat == "sauvegardes":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_save1 and bouton_save1.collidepoint(souris):
+                        slot_actuel = 1; charger(1); etat = "menu2"
+                    elif bouton_save2 and bouton_save2.collidepoint(souris):
+                        slot_actuel = 2; charger(2); etat = "menu2"
+                    elif bouton_save3 and bouton_save3.collidepoint(souris):
+                        slot_actuel = 3; charger(3); etat = "menu2"
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+        if etat == "credits":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+        if etat == "menu2":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_shop and bouton_shop.collidepoint(souris):
+                        etat = "shop"
+                    if bouton_sel_niveau and bouton_sel_niveau.collidepoint(souris):
+                        etat = "sel_niveau"
+                    if bouton_sel_niveau_special and bouton_sel_niveau_special.collidepoint(souris):
+                        initialiser_mode_infini()
+                        etat = "niveau"
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+        elif etat == "arbre_competences":
+            if event.type == pygame.MOUSEWHEEL:
+                scroll_arbre = max(0, scroll_arbre - event.y * 30)
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                souris = souris_vers_jeu(event.pos)
+                boutons_comp = globals().get("_boutons_comp", {})
+                amelioration_faite = False
+                for cle, rect_c in boutons_comp.items():
+                    if amelioration_faite:
+                        break
+                    comp = competences[cle]
+                    cout_pts = cout_prochain_niveau(comp, cle)
+                    if rect_c.collidepoint(souris):
+                        plafond = max_debloque_competence(cle)
+                        if comp["niveau"] < comp["max"] and comp["niveau"] < plafond and points_competences >= cout_pts:
+                            comp["niveau"] += 1
+                            points_competences -= cout_pts
+                            amelioration_faite = True
+                if bouton_menu and bouton_menu.collidepoint(souris):
+                    sauvegarder(slot_actuel)
+                    etat = "menu2"
+
+        if etat == "sel_niveau":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    for rect, numero in boutons_niveaux:
+                        if rect.collidepoint(souris) and numero <= niveau_max:
+                            numero_niveau = numero
+                            mode_infini = False
+                            charger_niveau(numero)
+                            etat = "niveau"
+                    if bouton_shop and bouton_shop.collidepoint(souris):
+                        etat = "shop"
+                    if bouton_menu and bouton_menu.collidepoint(souris):
+                        etat = "menu2"
+                    if bouton_arbre and bouton_arbre.collidepoint(souris):
+                        etat = "arbre_competences"
+            if event.type == pygame.MOUSEWHEEL:
+                scroll_sel_niveau = max(0, scroll_sel_niveau - event.y * 30)
+
+        elif etat == "niveau":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                x, y = souris_vers_jeu(event.pos)
+                dx = x - joueur["x"]
+                dy = y - joueur["y"]
+                distance = (dx**2 + dy**2) ** 0.5
+                if event.button == 1:
+                    derniere_pos_souris_jeu = souris_vers_jeu(event.pos)
+                    attaquer()
+                if bouton_menu and bouton_menu.collidepoint(souris):
+                    charger_niveau(numero_niveau)
+                    etat = "sel_niveau"
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_TAB:
+                    # Cycle entre les armes disponibles avec TAB
+                    if mode_infini:
+                        disponibles = ["poing"] + [a for a in ARMES_SHOP if armes_infini[a]]
+                    else:
+                        disponibles = ["poing"] + [a for a in ARMES_SHOP if armes_debloquees[a]]
+                    idx = disponibles.index(arme_actuelle) if arme_actuelle in disponibles else 0
+                    arme_actuelle = disponibles[(idx + 1) % len(disponibles)]
+
+        elif etat == "shop":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                souris = souris_vers_jeu(event.pos)
+                boutons_shop = globals().get("_boutons_shop", {})
+                for arme, rect in boutons_shop.items():
+                    niv_req = NIVEAU_REQUIS_ARMES.get(arme, 1)
+                    if rect.collidepoint(souris) and not armes_debloquees[arme] and niveau_max >= niv_req:
+                        prix = PRIX_ARMES_HISTOIRE[arme]
+                        if argent >= prix:
+                            argent -= prix
+                            armes_debloquees[arme] = 1
+                            sauvegarder(slot_actuel)
+                if bouton_menu and bouton_menu.collidepoint(souris):
+                    etat = "menu2"
+                
+                for arme_nom, rect_bouton in boutons_upgrade_rects.items():
+                    if rect_bouton.collidepoint(souris):
+                        niv_actuel = armes_niveaux.get(arme_nom, 0)
+                        prix = cout_upgrade_arme(arme_nom, niv_actuel)
+                        
+                        if argent >= prix and niv_actuel < UPGRADE_MAX:
+                            argent -= prix
+                            armes_niveaux[arme_nom] = niv_actuel + 1
+                            sauvegarder(slot_actuel)
+                        
+            if event.type == pygame.MOUSEWHEEL:
+                scroll_shop = max(0, scroll_shop - event.y * 30)
+
+        elif etat == "choix_boost":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                souris = souris_vers_jeu(event.pos)
+
+                for rect_b, boost in boutons_boosts:
+                    if rect_b.collidepoint(souris):
+                        appliquer_boost(boost)
+                        lancer_nouvelle_vague_infinie()
+                        etat = "niveau"
+
+                if bouton_shop_infini and bouton_shop_infini.collidepoint(souris):
+                    etat = "shop_infini"
+
+                if bouton_passer_boost and bouton_passer_boost.collidepoint(souris):
+                    lancer_nouvelle_vague_infinie()
+                    etat = "niveau"
+
+                if bouton_menu_go and bouton_menu_go.collidepoint(souris):
+                    mode_infini = False
+                    etat = "menu2"
+
+        elif etat == "shop_infini":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                souris = souris_vers_jeu(event.pos)
+
+                for arme, rect_si in boutons_shop_infini.items():
+                    if rect_si.collidepoint(souris) and not armes_infini[arme]:
+                        prix = PRIX_ARMES_INFINI[arme]
+                        if argent_infini >= prix:
+                            argent_infini -= prix
+                            armes_infini[arme] = True
+
+                if bouton_retour_shop_infini and bouton_retour_shop_infini.collidepoint(souris):
+                    etat = "choix_boost"
+
+        elif etat == "lore":
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if not lore_texte_complet:
+                    lore_index_lettre = sum(len(l) for l in lore_actif["lignes"])
+                    lore_texte_complet = True
+                else:
+                    etat = "niveau_gagne"
+
+        elif etat == "niveau_gagne":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_suite and bouton_suite.collidepoint(souris):
+                        if numero_niveau < len(niveaux):
+                            numero_niveau += 1
+                            charger_niveau(numero_niveau)
+                            etat = "niveau"
+                        else:
+                            etat = "sel_niveau"
+                    if bouton_menu_go and bouton_menu_go.collidepoint(souris):
+                        etat = "menu2"
+
+        elif etat == "game_over":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_rejouer and bouton_rejouer.collidepoint(souris):
+                        if mode_infini:
+                            initialiser_mode_infini()
+                        else:
+                            charger_niveau(numero_niveau)
+                        etat = "niveau"
+                    if bouton_menu_go and bouton_menu_go.collidepoint(souris):
+                        mode_infini = False
+                        etat = "menu2"
+
+def mettre_a_jour():
+    global timer_ennemi, timer_difficulte, delai_ennemi, score, etat
+    global numero_niveau, niveau_max, vague_actuelle, slot_actuel
+    global timer_visuel_attaque, timer_attaque, ennemis_spawnes_vague
+    global ennemis_tues_vague, boss_actif, boss_spawne, boss_anim_spawn
+    global boss_timer_capacite, argent, fureur_stacks, timer_fureur
+    global combo_poing, timer_combo_poing, timer_message_effet
+    global timer_surcharge, surcharge_prete, score_total, points_competences, timer_cooldown_arbre
+    global lore_actif, lore_index_lettre, lore_timer, lore_ligne_actuelle, lore_texte_complet
+
+    if timer_cooldown_arbre > 0:
+        timer_cooldown_arbre -= 1
+
+    if etat != "niveau":
+        if timer_visuel_attaque > 0:
+            timer_visuel_attaque -= 1
+        return
+
+    logique_ennemis()
+    logique_boss()
+
+    # Mise a jour des effets de statut (saignement, poison, ralentissement)
+    mettre_a_jour_effets_statut()
+    mettre_a_jour_bulles()
+
+    if etat == "lore":
+        global lore_index_lettre, lore_timer, lore_ligne_actuelle, lore_texte_complet
+        if not lore_texte_complet:
+            lore_timer += 1
+            if lore_timer >= 2:  # vitesse : 1 lettre toutes les 2 frames (ajustable)
+                lore_timer = 0
+                lore_index_lettre += 1
+                # Calculer la ligne actuelle
+                total = 0
+                for i, ligne in enumerate(lore_actif["lignes"]):
+                    total += len(ligne)
+                    if lore_index_lettre <= total:
+                        lore_ligne_actuelle = i
+                        break
+                # Tout affiché ?
+                total_chars = sum(len(l) for l in lore_actif["lignes"])
+                if lore_index_lettre >= total_chars:
+                    lore_index_lettre = total_chars
+                    lore_texte_complet = True
+        return
+    
+    # Timer du combo poing : si le joueur n'attaque pas, le combo se remet a 0
+    if timer_combo_poing > 0:
+        timer_combo_poing -= 1
+    elif combo_poing > 0:
+        combo_poing = 0
+
+    # Timer du message d'effet a l'ecran
+    if timer_message_effet > 0:
+        timer_message_effet -= 1
+
+    # Decrementer le timer de marquage sur chaque ennemi
+    for e in ennemis:
+        if e.get("marque", 0) > 0:
+            e["marque"] -= 1
+    if boss_actif and boss_actif.get("marque", 0) > 0:
+        boss_actif["marque"] -= 1
+
+    # Surcharge (foudre) : le timer monte quand on n'attaque pas.
+    # A 120 frames (2 secondes), la surcharge est prete.
+    # Elle se remet a 0 des qu'on attaque (gere dans attaquer()).
+    if arme_actuelle == "foudre":
+        if timer_surcharge < 120:
+            timer_surcharge += 1
+        # surcharge_prete est mis a jour dans attaquer() apres consommation
+    else:
+        # Si on change d'arme, on remet le timer a 0
+        timer_surcharge = 0
+
+    if ennemis_spawnes_vague < ennemis_par_vague:
+        timer_ennemi += 1
+        if timer_ennemi >= delai_ennemi:
+            nb_spawn = 1 + (numero_niveau - 1) // 3
+            for _ in range(nb_spawn):
+                if ennemis_spawnes_vague < ennemis_par_vague:
+                    creer_ennemi()
+                    ennemis_spawnes_vague += 1
+            timer_ennemi = 0
+    
+    # --- FUREUR SANGUINE : decrement du timer, perte des stacks a 0 ---
+    if fureur_stacks > 0:
+        timer_fureur -= 1
+        if timer_fureur <= 0:
+            fureur_stacks = 0
+            timer_fureur  = 0
+
+    seuil_fin = max(1, ennemis_par_vague // 10)
+    tous_spawnes = ennemis_spawnes_vague >= ennemis_par_vague
+    presque_tous_morts = len(ennemis) <= seuil_fin
+    boss_mort = boss_actif is None
+
+    if tous_spawnes and presque_tous_morts and boss_mort:
+
+        if mode_infini:
+            choisir_boosts()
+            etat = "choix_boost"
+            return
+
+        if vague_actuelle < nb_vagues_total:
+            vague_actuelle += 1
+            ennemis_spawnes_vague = 0
+            ennemis_tues_vague = 0
+            ennemis.clear()
+            timer_ennemi = 0
+            # Petit soin de fin de vague (mode histoire)
+            soin_vague = 5
+            joueur["hp"] = min(joueur["hp_max"], joueur["hp"] + soin_vague)
+            objectifs_points[0]["hp"] = min(objectifs_points[0]["hp_max"], objectifs_points[0]["hp"] + 10)
+            degats_flottants.append({
+                "x": joueur["x"], "y": joueur["y"] - 30,
+                "texte": f"+{soin_vague} HP (vague)", "duree": 60,
+                "couleur": (80, 255, 120)
+            })
+            if vague_actuelle == nb_vagues_total and boss_type_niveau and not boss_spawne:
+                creer_boss(boss_type_niveau)
+                boss_spawne = True
+        else:
+            if numero_niveau == niveau_max and niveau_max < len(niveaux):
+                niveau_max += 1
+            score_total += score
+            points_competences += score // 500
+            sauvegarder(slot_actuel)
+            if numero_niveau in LORE_NIVEAUX:
+                lore_actif = LORE_NIVEAUX[numero_niveau]
+                lore_index_lettre = 0
+                lore_timer = 0
+                lore_ligne_actuelle = 0
+                lore_texte_complet = False
+                etat = "lore"
+            else:
+                etat = "niveau_gagne"
+            return
+
+    if joueur["hp"] <= 0:
+        etat = "game_over"
+        return
+    if objectifs_points[0]["hp"] <= 0:
+        etat = "game_over"
+        return
+
+    if timer_attaque > 0:
+        timer_attaque -= 1
+    if timer_visuel_attaque > 0:
+        timer_visuel_attaque -= 1
+
+    nb_p = len(particules)
+    for _ in range(nb_p):
+        p = particules.popleft()
+        p["x"] += p["vx"]; p["y"] += p["vy"]; p["vy"] += 0.2; p["duree"] -= 1
+        if p["duree"] > 0: particules.append(p)
+
+    nb_d = len(degats_flottants)
+    for _ in range(nb_d):
+        d = degats_flottants.popleft()
+        d["y"] -= 1; d["duree"] -= 1
+        if d["duree"] > 0: degats_flottants.append(d)
+
+    deplacer_joueur()
+
+    if mode_infini and boss_type_niveau and not boss_spawne:
+        if ennemis_spawnes_vague >= ennemis_par_vague:
+            creer_boss(boss_type_niveau)
+            boss_spawne = True
+
+def afficher():
+    global bouton_menu, bouton_shop, bouton_sel_niveau, bouton_succes
+    global bouton_jouer, bouton_quitter, bouton_ecran_titre
+    global bouton_sel_niveau_special, arme1_debloquee, argent
+    global bouton_arme1, hp, bouton_credits, bouton_sauvegardes
+    global bouton_save1, bouton_save2, bouton_save3, bouton_menu_go
+    global bouton_rejouer, scroll_sel_niveau, scroll_shop, bouton_suite
+    global bouton_shop_infini, bouton_passer_boost, bouton_retour_shop_infini
+    global boutons_boosts, boutons_shop_infini, bouton_arbre, scroll_arbre, boutons_upgrade_rects
+    boutons_upgrade_rects = {}
+
+    if etat == "menu1":
+        surface_jeu.fill((15, 15, 30))
+        titre = font_titre.render("THE GOBLIN GAME", True, blanc)
+        rect_titre = titre.get_rect(center=(960, 120))
+        surface_jeu.blit(titre, rect_titre)
+        sous = font_sous.render("A Goblin Adventure", True, (180, 180, 180))
+        rect_sous = sous.get_rect(center=(960, 180))
+        surface_jeu.blit(sous, rect_sous)
+        bouton_jouer = button(blanc, "JOUER", 760, 350, 400, 80, noir, font, around=2)
+        bouton_succes = button(blanc, "SUCCES", 760, 480, 400, 80, noir, font, around=2)
+        bouton_credits = button(blanc, "CREDITS", 760, 610, 400, 80, noir, font, around=2)
+        bouton_quitter = button(blanc, "QUITTER", 760, 740, 400, 80, noir, font, around=2)
+        jouer_musique("menu")
+
+    if etat == "sauvegardes":
+        surface_jeu.fill((15, 15, 30))
+        titre_save = font_police.render("CHOISISSEZ VOTRE PARTIE", True, blanc)
+        surface_jeu.blit(titre_save, titre_save.get_rect(center=(s(960), s(100))))
+        bouton_ecran_titre = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+        y_depart = 280
+        espacement_slot = 220
+        global bouton_save1, bouton_save2, bouton_save3
+        for i in range(1, 4):
+            y_actuel = y_depart + (i - 1) * espacement_slot
+            rect = button(blanc, f"SAUVEGARDE {i}", 760, y_actuel, 400, 80, noir, font, 2)
+            if i == 1: bouton_save1 = rect
+            elif i == 2: bouton_save2 = rect
+            elif i == 3: bouton_save3 = rect
+            infos = recuperer_infos_save(i)
+            if infos is not None:
+                texte_info = f"Niveau Max : {infos['niv']} | Argent : {infos['argent']} | Armes : {infos['nb']}"
+                couleur_info = (0, 255, 150)
+            else:
+                texte_info = "Emplacement vide"
+                couleur_info = (150, 150, 150)
+            img_rendue = font.render(texte_info, True, couleur_info)
+            rect_rendu = img_rendue.get_rect(center=(s(960), s(y_actuel + 110)))
+            surface_jeu.blit(img_rendue, rect_rendu)
+
+    if etat == "credits":
+        surface_jeu.fill((15, 15, 30))
+        bouton_ecran_titre = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+        credits_lignes = [
+            "THE GOBLIN GAME", "",
+            "Un jeu realise dans le cadre du projet NSI", "",
+            "Developpement : Dan et Louis",
+            "Concept : Dan et Louis",
+            "Motivateur du groupe : Antoine",
+            "Graphismes :",
+            "Ennemis, boules et decor de Noel", "",
+            "Technologie : Python / Pygame", "",
+            "2025 - 2026", "",
+            "Merci d'avoir joue !"
+        ]
+        y = int(200 * SCALE)
+        for ligne in credits_lignes:
+            texte = font.render(ligne, True, blanc)
+            rect_texte = texte.get_rect(center=(int(960 * SCALE), y))
+            surface_jeu.blit(texte, rect_texte)
+            y += int(40 * SCALE)
+
+    if etat == "menu2":
+        surface_jeu.fill(bon_bleu)
+        bouton_ecran_titre = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+        bouton_shop = button(blanc, "SHOP", 1750, 20, 150, 50, noir, font, 2)
+        titre_m2 = font_police.render("THE GOBLIN GAME", True, blanc)
+        surface_jeu.blit(titre_m2, titre_m2.get_rect(center=(960, 180)))
+        bouton_sel_niveau = button(blanc, "NIVEAUX HISTOIRE", 710, 320, 500, 100, noir, font, 2)
+        bouton_sel_niveau_special = button((180, 40, 40), "MODE INFINI", 710, 460, 500, 100, blanc, font, 2)
+
+    if etat == "sel_niveau":
+        surface_jeu.fill(bon_bleu)
+        global boutons_niveaux
+        boutons_niveaux = []
+        bouton_menu = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+        bouton_shop = button(blanc, "SHOP", 1750, 20, 150, 50, noir, font, 2)
+        bouton_arbre = button((50, 150, 50), "COMPETENCES", 1550, 80, 340, 50, blanc, font, 2)
+        txt_pts = font_hud.render(f"Pts : {points_competences}", True, (100, 255, 100))
+        surface_jeu.blit(txt_pts, (1555, 140))                                                 
+        texte_niv = font.render(f"Niveau max : {niveau_max}", True, blanc)
+        surface_jeu.blit(texte_niv, (s(20), s(100)))
+        largeur_btn = 200
+        hauteur_btn = 80
+        espacement_x = 40
+        espacement_y = 40
+        x_depart = 380
+        y_depart = 180 - scroll_sel_niveau
+        x = x_depart
+        y = y_depart
+        jouer_musique("menu")
+
+        police_titre_niv = pygame.font.SysFont(None, 60)
+        for i in range(len(niveaux)):
+            numero = i + 1
+            if i % 10 == 0:
+                monde = (i // 10) + 1
+                noms_mondes = {
+                    1: "Monde 1 : La Foret",
+                    2: "Monde 2 : Le Desert",
+                    3: "Monde 3 : L'Ile",
+                    4: "Monde 4 : La Montagne",
+                    5: "Monde 5 : L'Espace",
+                }
+                nom_theme = noms_mondes.get(monde, f"Monde {monde}")
+                if i > 0:
+                    y += 80
+                titre_theme = police_titre_niv.render(nom_theme, True, (255, 200, 50))
+                rect_titre = titre_theme.get_rect(center=(s(960), s(y)))
+                surface_jeu.blit(titre_theme, rect_titre)
+                y += 70
+                x = x_depart
+
+            if numero <= niveau_max:
+                rect = button(blanc, f"Niv {numero}", x, y, largeur_btn, hauteur_btn, noir, font, 2)
+            else:
+                rect = button(gris, f"Niv {numero}", x, y, largeur_btn, hauteur_btn, noir, font, 2)
+
+            boutons_niveaux.append((rect, numero))
+            x += largeur_btn + espacement_x
+            if (i + 1) % 5 == 0:
+                x = x_depart
+                y += hauteur_btn + espacement_y
+
+    elif etat == "niveau":
+        dessiner_jeu()
+        bouton_menu = button((150, 30, 30), "QUITTER", 20, 20, 120, 50, blanc, font, 2)
+
+    elif etat == "shop":
+        # ============================================================
+        # SHOP HISTOIRE - 11 armes avec progression logique
+        # ============================================================
+        surface_jeu.fill((40, 40, 60))
+        titre_shop = font_police.render("BOUTIQUE D'ARMEMENT", True, blanc)
+        surface_jeu.blit(titre_shop, titre_shop.get_rect(center=(960, 60)))
+        texte_argent = font.render(f"Pieces : {argent}", True, (255, 215, 0))
+        surface_jeu.blit(texte_argent, (1550, 20))
+        bouton_menu = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+
+        # Legendes des categories
+        font_cat = pygame.font.SysFont(None, 36)
+        categories = [
+        (110 - scroll_shop,  "-- ARMES DE BASE --",          (180, 220, 180)),
+        (490 - scroll_shop,  "-- ARMES INTERMEDIAIRES --",   (150, 200, 255)),
+        (870 - scroll_shop,  "-- ARMES AVANCEES --",         (255, 180, 80)),
+        (1130 - scroll_shop, "-- ARMES LEGENDAIRES --",      (255, 80,  80)),
+        (1600 - scroll_shop, "-- ARMES DESERT --",           (240, 200, 80)),
+        (1920 - scroll_shop, "-- ARMES ILE --",              (80,  200, 255)),
+        (2240 - scroll_shop, "-- ARMES MONTAGNE --",         (200, 230, 255)),
+        (2560 - scroll_shop, "-- ARMES ESPACE --",           (180, 80,  255)),
+    ]
+        for y_cat, txt_cat, coul_cat in categories:
+            if 80 < y_cat < h - 50:
+                surf_cat = font_cat.render(txt_cat, True, coul_cat)
+                surface_jeu.blit(surf_cat, surf_cat.get_rect(center=(960, y_cat)))
+
+        boutons_shop = {}
+        x1 = 200
+        # y de depart pour chaque arme dans le shop (par categorie)
+        y_armes = {
+        # Base
+        "gourdin":     140,
+        "dague":       250,
+        # Intermediaires
+        "epee":        530,
+        "faux":        640,
+        "lance":       750,
+        "hache":       860,
+        # Avancees
+        "trident":     1010,
+        "arbalete":    1120,
+        "marteau":     1230,
+        # Legendaires
+        "foudre":      1380,
+        "katana":      1490,
+        # Desert
+        "cimeterre":   1700,
+        "fouet":       1810,
+        # Ile
+        "harpon":      2020,
+        "sabre_mer":   2130,
+        # Montagne
+        "pic":         2340,
+        "masse_glace": 2450,
+        # Espace
+        "laser":       2660,
+        "plasma_gun":  2770,
+    }
+
+        for arme in ARMES_SHOP:
+            stats = armes_stats[arme]
+            prix = PRIX_ARMES_HISTOIRE[arme]
+            y_arme = y_armes[arme] - scroll_shop
+
+            if y_arme < 80 or y_arme > h + 200:
+                continue
+
+            pygame.draw.rect(surface_jeu, (60, 60, 90), (x1 - 10, y_arme - 10, 1500, 100), border_radius=8)
+            nom = font_sub.render(arme.upper(), True, (255, 200, 50))
+            surface_jeu.blit(nom, (x1, y_arme))
+            desc = font_hud.render(stats["description"], True, (180, 180, 180))
+            surface_jeu.blit(desc, (x1, y_arme + 52))
+            stat_txt = font_hud.render(
+                f"Portee: {stats['portee']}  Angle: {stats['angle']}  Degats: {stats['degats']}  Cooldown: {stats['cooldown']}",
+                True, (150, 220, 255))
+            surface_jeu.blit(stat_txt, (x1 + 480, y_arme + 28))
+            # Affichage de l'effet special
+            effet_txt = font_hud.render(f"[ {stats.get('effet_desc', '')} ]", True, (255, 180, 50))
+            surface_jeu.blit(effet_txt, (x1 + 480, y_arme + 55))
+
+            niv_req = NIVEAU_REQUIS_ARMES.get(arme, 1)
+            if armes_debloquees[arme]:
+                rect = button((80, 80, 80), "DEBLOQUEE", 1500, y_arme + 15, 220, 60, noir, font, 2)
+            elif niveau_max < niv_req:
+                rect = button((60, 30, 30), f"Niv {niv_req} requis", 1500, y_arme + 15, 220, 60, gris, font, 2)
+            else:
+                label = f"ACHETER {prix}"
+                couleur_btn = blanc if argent >= prix else gris
+                rect = button(couleur_btn, label, 1500, y_arme + 15, 220, 60, noir, font, 2)
+            boutons_shop[arme] = rect
+            if armes_debloquees.get(arme) or arme == "poing":
+                niv_up = armes_niveaux.get(arme, 0)
+                if niv_up < UPGRADE_MAX:
+                    cout = cout_upgrade_arme(arme, niv_up)
+                    label_up = f"FORGE +{niv_up+1} ({cout}g)"
+                    couleur_up = (255, 150, 0) if argent >= cout else (100, 100, 100)
+                    rect_up = button(couleur_up, label_up, 1500, y_arme + 45, 220, 35, noir, font_hud, 2)
+                    boutons_upgrade_rects[arme] = rect_up
+                else:
+                    button((150, 100, 0), "FORGE MAX", 1500, y_arme + 45, 220, 35, noir, font_hud, 2)
+            
+        globals()["_boutons_shop"] = boutons_shop
+
+    # ============================================================
+    # ECRAN INTER-VAGUE : choix du boost
+    # ============================================================
+    elif etat == "choix_boost":
+        surface_jeu.fill((10, 10, 30))
+
+        titre_vague = font_police.render(f"VAGUE {numero_vague_infinie} TERMINEE !", True, (255, 200, 50))
+        surface_jeu.blit(titre_vague, titre_vague.get_rect(center=(960, 90)))
+
+        sous_titre = font_sous.render("Choisis un boost pour la prochaine vague :", True, (200, 200, 200))
+        surface_jeu.blit(sous_titre, sous_titre.get_rect(center=(960, 160)))
+
+        txt_argent = font.render(f"Pieces : {argent_infini}", True, (255, 215, 0))
+        surface_jeu.blit(txt_argent, (1600, 30))
+
+        txt_score = font_hud.render(f"Score : {score}", True, blanc)
+        surface_jeu.blit(txt_score, (30, 30))
+
+        # Avertissement boss a la prochaine vague
+        prochaine_vague = numero_vague_infinie + 1
+        if prochaine_vague % 5 == 0:
+            txt_boss = font_hud.render("ATTENTION : Un BOSS arrive a la prochaine vague !", True, (255, 80, 80))
+            surface_jeu.blit(txt_boss, txt_boss.get_rect(center=(960, 215)))
+
+        # Les 3 cartes de boost
+        boutons_boosts = []
+        for i in range(len(boosts_proposes)):
+            boost   = boosts_proposes[i]
+            x_carte = 200 + i * 510
+            y_carte = 240
+
+            if boost.get("rare", False):
+                couleur_fond = (100, 70, 0)
+                couleur_bord = (255, 200, 0)
+            else:
+                couleur_fond = (30, 30, 70)
+                couleur_bord = (80, 80, 180)
+
+            pygame.draw.rect(surface_jeu, couleur_fond, (x_carte, y_carte, 460, 260), border_radius=12)
+            pygame.draw.rect(surface_jeu, couleur_bord, (x_carte, y_carte, 460, 260), 3, border_radius=12)
+
+            if boost.get("rare", False):
+                lbl = font_hud.render("RARE", True, (255, 220, 50))
+                surface_jeu.blit(lbl, lbl.get_rect(center=(x_carte + 230, y_carte + 28)))
+
+            nom_txt = font_sub.render(boost["nom"], True, blanc)
+            surface_jeu.blit(nom_txt, nom_txt.get_rect(center=(x_carte + 230, y_carte + 105)))
+
+            desc_txt = font_hud.render(boost["desc"], True, (180, 210, 180))
+            surface_jeu.blit(desc_txt, desc_txt.get_rect(center=(x_carte + 230, y_carte + 160)))
+    
+            rect_btn = button(couleur_bord, "CHOISIR", x_carte + 130, y_carte + 200, 200, 48, noir, font, 2)
+            boutons_boosts.append((rect_btn, boost))
+
+        # Colonne gauche : boosts actifs
+        pygame.draw.rect(surface_jeu, (20, 20, 50), (20, 560, 380, 480), border_radius=10)
+        titre_actifs = font_hud.render(f"Boosts actifs ({len(boosts_actifs)})", True, (150, 220, 255))
+        surface_jeu.blit(titre_actifs, (30, 570))
+        debut = max(0, len(boosts_actifs) - 11)
+        for i in range(debut, len(boosts_actifs)):
+            b = boosts_actifs[i]
+            couleur_ligne = (255, 200, 50) if b.get("rare", False) else (200, 200, 200)
+            ligne = font_hud.render(f"  {b['nom']}", True, couleur_ligne)
+            surface_jeu.blit(ligne, (30, 615 + (i - debut) * 36))
+
+        # Colonne droite : stats du joueur
+        pygame.draw.rect(surface_jeu, (20, 20, 50), (1500, 560, 400, 430), border_radius=10)
+        titre_stats = font_hud.render("Tes stats", True, (150, 220, 255))
+        surface_jeu.blit(titre_stats, (1510, 570))
+
+        stats_arme = armes_stats[arme_actuelle]
+        angle_affiche = min(179, int(stats_arme["angle"] * mult_angle))
+        nb_stacks_vampire = len([b for b in boosts_actifs if b["type"] == "vampire"])
+        chance_vamp_affichee = min(100, nb_stacks_vampire * 25)
+        lignes_stats = [
+            f"HP : {int(joueur['hp'])} / {joueur['hp_max']}",
+            f"Degats x{round(mult_degats, 2)}",
+            f"Portee x{round(mult_portee, 2)}",
+            f"Angle : {angle_affiche} deg",
+            f"Vitesse +{bonus_vitesse}",
+            f"Cooldown x{round(mult_cooldown, 2)}",
+            f"Armure x{round(mult_armure, 2)}",
+            f"Vampire : {chance_vamp_affichee}% / {bonus_vampire}HP",
+            f"Magnet : +{bonus_magnet}/vague",
+            f"Double frappe : {'OUI' if double_frappe else 'NON'}",
+        ]
+        for i in range(len(lignes_stats)):
+            txt = font_hud.render(lignes_stats[i], True, blanc)
+            surface_jeu.blit(txt, (1510, 615 + i * 38))
+
+        bouton_shop_infini  = button((255, 180, 0), f"ARMURERIE  ({argent_infini} pieces)", 560, 620, 800, 65, noir, font, 2)
+        bouton_passer_boost = button(gris,           "PASSER",                               760, 710, 400, 55, blanc, font, 2)
+        bouton_menu_go      = button((60, 60, 60),   "QUITTER LE RUN",                      760, 790, 400, 55, blanc, font, 2)
+
+    # ============================================================
+    # SHOP INFINI - toutes les armes disponibles
+    # ============================================================
+    elif etat == "shop_infini":
+        surface_jeu.fill((25, 15, 40))
+
+        titre_si = font_police.render("ARMURERIE", True, (255, 215, 0))
+        surface_jeu.blit(titre_si, titre_si.get_rect(center=(960, 70)))
+
+        txt_a = font.render(f"Pieces : {argent_infini}", True, (255, 215, 0))
+        surface_jeu.blit(txt_a, (1550, 30))
+
+        bouton_retour_shop_infini = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+
+        boutons_shop_infini = {}
+        x1 = 200
+        for i in range(len(ARMES_SHOP)):
+            arme   = ARMES_SHOP[i]
+            # 2 colonnes pour afficher toutes les armes
+            if i < 6:
+                x_col = x1
+                y_arme = 140 + i * 125
+            else:
+                x_col = x1 + 900
+                y_arme = 140 + (i - 6) * 125
+
+            stats  = armes_stats[arme]
+            prix   = PRIX_ARMES_INFINI[arme]
+
+            pygame.draw.rect(surface_jeu, (45, 30, 65), (x_col - 10, y_arme - 10, 820, 110), border_radius=8)
+            nom = font_sub.render(arme.upper(), True, (255, 200, 50))
+            surface_jeu.blit(nom, (x_col, y_arme))
+            desc_surf = font_hud.render(stats["description"], True, (180, 180, 180))
+            surface_jeu.blit(desc_surf, (x_col, y_arme + 50))
+            stat_txt = font_hud.render(
+                f"D:{stats['degats']} P:{stats['portee']} A:{stats['angle']} CD:{stats['cooldown']}",
+                True, (150, 220, 255))
+            surface_jeu.blit(stat_txt, (x_col + 350, y_arme + 25))
+            # Effet special
+            effet_si = font_hud.render(f"[ {stats.get('effet_desc', '')} ]", True, (255, 180, 50))
+            surface_jeu.blit(effet_si, (x_col + 350, y_arme + 55))
+
+            if armes_infini[arme]:
+                rect = button((80, 80, 80), "POSSEDEE", x_col + 580, y_arme + 20, 200, 50, noir, font, 2)
+            elif argent_infini >= prix:
+                rect = button(blanc, f"ACHAT {prix}", x_col + 580, y_arme + 20, 200, 50, noir, font, 2)
+            else:
+                rect = button(gris, f"{prix} pcs", x_col + 580, y_arme + 20, 200, 50, noir, font, 2)
+
+            boutons_shop_infini[arme] = rect
+
+    elif etat == "arbre_competences":
+        surface_jeu.fill((10, 20, 10))
+        bouton_menu = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+
+        titre_a = font_police.render("ARBRE DE COMPETENCES", True, (100, 255, 100))
+        surface_jeu.blit(titre_a, titre_a.get_rect(center=(960, 80)))
+
+        txt_pts2 = font_sub.render(f"Points disponibles : {points_competences}", True, (255, 220, 50))
+        surface_jeu.blit(txt_pts2, txt_pts2.get_rect(center=(960, 150)))
+
+        txt_sc2 = font_hud.render(f"Score total : {score_total}  (1 point tous les 500 de score)", True, (160, 160, 160))
+        note_hist = font_hud.render("Les competences s'appliquent uniquement au mode Histoire.", True, (255, 200, 80))
+        surface_jeu.blit(note_hist, note_hist.get_rect(center=(960, 230)))
+
+        infos_comp = {
+            "sante":   {"label": "SANTE",   "couleur": (80, 220, 80),  "desc": f"+{int(competences['sante']['bonus_par_niveau'])} HP max par niveau"},
+            "defense": {"label": "DEFENSE", "couleur": (80, 160, 255), "desc": f"+{int(competences['defense']['bonus_par_niveau']*100)}% armure par niveau"},
+            "degats":  {"label": "DEGATS",  "couleur": (255, 100, 50), "desc": f"+{int(competences['degats']['bonus_par_niveau']*100)}% degats par niveau"},
+            "vitesse": {"label": "VITESSE", "couleur": (255, 220, 50), "desc": f"+{int(competences['vitesse']['bonus_par_niveau'])} deplacement (max {competences['vitesse']['max']})"},
+        }
+
+        boutons_comp = {}
+        largeur_carte = 380
+        espacement = 50
+        x_depart = 180
+        y_carte = 260 - scroll_arbre
+
+        for i, cle in enumerate(competences):
+            comp = competences[cle]
+            info = infos_comp[cle]
+            x_carte = x_depart + i * (largeur_carte + espacement)
+            cout_pts = cout_prochain_niveau(comp, cle)
+
+            couleur_fond = (20, 40, 20) if comp["niveau"] < comp["max"] else (40, 60, 10)
+            pygame.draw.rect(surface_jeu, couleur_fond, (x_carte, y_carte, largeur_carte, 500), border_radius=14)
+            pygame.draw.rect(surface_jeu, info["couleur"], (x_carte, y_carte, largeur_carte, 500), 3, border_radius=14)
+
+            nom_c = font_sub.render(info["label"], True, info["couleur"])
+            surface_jeu.blit(nom_c, nom_c.get_rect(center=(x_carte + largeur_carte // 2, y_carte + 45)))
+
+            desc_c = font_hud.render(info["desc"], True, (200, 200, 200))
+            surface_jeu.blit(desc_c, desc_c.get_rect(center=(x_carte + largeur_carte // 2, y_carte + 95)))
+
+            plafond = max_debloque_competence(cle)
+            niv_txt = font_sub.render(f"Niv {comp['niveau']} / {plafond}  (max {comp['max']})", True, blanc)
+            surface_jeu.blit(niv_txt, niv_txt.get_rect(center=(x_carte + largeur_carte // 2, y_carte + 150)))
+
+
+            barre_w = largeur_carte - 40
+            barre_x = x_carte + 20
+            barre_y_pos = y_carte + 195
+            pygame.draw.rect(surface_jeu, (40, 40, 40), (barre_x, barre_y_pos, barre_w, 20), border_radius=5)
+            if comp["max"] > 0 and comp["niveau"] > 0:
+                remplissage = int(barre_w * comp["niveau"] / comp["max"])
+                pygame.draw.rect(surface_jeu, info["couleur"], (barre_x, barre_y_pos, remplissage, 20), border_radius=5)
+
+            if cle == "sante":
+                val = comp["niveau"] * comp["bonus_par_niveau"]
+                txt_val = font_hud.render(f"Actuel : +{int(val)} HP max", True, info["couleur"])
+            elif cle == "defense":
+                val = min(90, comp["niveau"] * comp["bonus_par_niveau"] * 100)
+                txt_val = font_hud.render(f"Actuel : -{int(val)}% degats recus (max 90%)", True, info["couleur"])
+            elif cle == "degats":
+                val = comp["niveau"] * comp["bonus_par_niveau"] * 100
+                txt_val = font_hud.render(f"Actuel : +{int(val)}% degats", True, info["couleur"])
+            else:
+                val = comp["niveau"] * comp["bonus_par_niveau"]
+                txt_val = font_hud.render(f"Actuel : +{int(val)} deplacement", True, info["couleur"])
+            surface_jeu.blit(txt_val, txt_val.get_rect(center=(x_carte + largeur_carte // 2, y_carte + 250)))
+
+            if comp["niveau"] < comp["max"]:
+                txt_cout = font_hud.render(f"Prochain : {cout_pts} point(s)", True, (255, 220, 100))
+                surface_jeu.blit(txt_cout, txt_cout.get_rect(center=(x_carte + largeur_carte // 2, y_carte + 295)))
+
+            if comp["niveau"] >= plafond:
+                if plafond >= comp["max"]:
+                    rect_c = button((40, 80, 40), "MAX TOTAL", x_carte + 70, y_carte + 380, 240, 60, blanc, font, 2)
+                else:
+                    prochain_theme = (plafond // 10) + 1
+                    noms_themes = {1:"Desert", 2:"Ile", 3:"Montagne", 4:"Espace"}
+                    nom_th = noms_themes.get(prochain_theme, "?")
+                    msg = f"Finir {nom_th} pour +10"
+                    rect_c = button((60, 60, 30), msg, x_carte + 40, y_carte + 380, 300, 60, (255,220,50), font, 2)
+            elif points_competences >= cout_pts and cout_pts > 0:
+                rect_c = button(info["couleur"], "AMELIORER", x_carte + 70, y_carte + 380, 240, 60, noir, font, 2)
+            else:
+                manque = cout_pts - points_competences if cout_pts > 0 else 0
+                rect_c = button(gris, f"Manque {manque} pts", x_carte + 50, y_carte + 380, 280, 60, blanc, font, 2)
+            boutons_comp[cle] = rect_c
+
+        globals()["_boutons_comp"] = boutons_comp
+
+    elif etat == "lore":
+        surface_jeu.fill((5, 5, 15))
+
+        # Titre en haut
+        surf_titre = font_police.render(lore_actif["titre"], True, (180, 140, 80))
+        surface_jeu.blit(surf_titre, surf_titre.get_rect(center=(960, 120)))
+
+        # Ligne décorative
+        pygame.draw.line(surface_jeu, (100, 80, 40), (300, 170), (1620, 170), 2)
+
+        lignes = lore_actif["lignes"]
+
+        # Effet machine à écrire : on calcule combien de caractères sont visibles
+        # en comptant les caractères cumulés sur toutes les lignes
+        total_chars_affiches = lore_index_lettre
+        y_texte = 250
+        for i, ligne in enumerate(lignes):
+            if total_chars_affiches <= 0:
+                break
+            chars_visibles = min(len(ligne), total_chars_affiches)
+            texte_partiel = ligne[:chars_visibles]
+            surf_ligne = font_sous.render(texte_partiel, True, (220, 210, 190))
+            surface_jeu.blit(surf_ligne, surf_ligne.get_rect(center=(960, y_texte + i * 55)))
+            total_chars_affiches -= len(ligne)
+
+        # Curseur clignotant sur la ligne en cours
+        if not lore_texte_complet:
+            if (pygame.time.get_ticks() // 400) % 2 == 0:
+                # Trouver la position du curseur
+                chars_avant = sum(len(lignes[j]) for j in range(lore_ligne_actuelle))
+                chars_sur_ligne = lore_index_lettre - chars_avant
+                texte_avant_curseur = lignes[lore_ligne_actuelle][:chars_sur_ligne]
+                surf_mesure = font_sous.render(texte_avant_curseur, True, (220, 210, 190))
+                # Position approximative du curseur
+                x_curseur = 960 - font_sous.size(lignes[lore_ligne_actuelle])[0] // 2 + surf_mesure.get_width()
+                y_curseur = y_texte + lore_ligne_actuelle * 55
+                pygame.draw.rect(surface_jeu, (200, 180, 100), (x_curseur + 2, y_curseur, 3, 28))
+
+        # Indicateur en bas
+        if lore_texte_complet:
+            if (pygame.time.get_ticks() // 500) % 2 == 0:
+                surf_suite = font_hud.render("[ Cliquer pour continuer ]", True, (150, 130, 80))
+                surface_jeu.blit(surf_suite, surf_suite.get_rect(center=(960, 950)))
+        else:
+            surf_skip = font_hud.render("[ Cliquer pour afficher tout ]", True, (80, 80, 80))
+            surface_jeu.blit(surf_skip, surf_skip.get_rect(center=(960, 950)))
+
+    elif etat == "niveau_gagne":
+        surface_jeu.fill((0, 20, 0))
+        titre = font_titre.render("NIVEAU TERMINE !", True, (50, 255, 50))
+        surface_jeu.blit(titre, titre.get_rect(center=(s(960), s(300))))
+        sub = font_sub.render(f"Score : {score}  |  Argent gagne : {argent}", True, blanc)
+        surface_jeu.blit(sub, sub.get_rect(center=(s(960), s(420))))
+        # Affiche les points gagnés
+        pts_gagnes = score // 500
+        txt_pts_gagnes = font_hud.render(f"+{pts_gagnes} point(s) de competence gagne(s) !", True, (100, 255, 100))
+        surface_jeu.blit(txt_pts_gagnes, txt_pts_gagnes.get_rect(center=(s(960), s(490))))
+        # Délai de 1.5 sec avant d'afficher le bouton suivant
+        if not hasattr(afficher, "_timer_niveau_gagne"):
+            afficher._timer_niveau_gagne = 0
+        afficher._timer_niveau_gagne += 1
+        if afficher._timer_niveau_gagne > 180:
+            bouton_suite = button(blanc, "NIVEAU SUIVANT", 560, 550, 400, 80, noir, font, 2)
+            bouton_menu_go = button(blanc, "MENU", 1060, 550, 300, 80, noir, font, 2)
+        else:
+            bouton_suite = None
+            bouton_menu_go = None
+            txt_wait = font_hud.render("...", True, gris)
+            surface_jeu.blit(txt_wait, txt_wait.get_rect(center=(s(960), s(590))))
+
+    elif etat == "game_over":
+        surface_jeu.fill((20, 0, 0))
+        titre = font_titre_gros.render("GAME OVER", True, (220, 0, 0))
+        surface_jeu.blit(titre, titre.get_rect(center=(s(960), s(300))))
+
+        if mode_infini:
+            txt_vague = font_sub.render(f"Vague atteinte : {numero_vague_infinie}", True, blanc)
+            surface_jeu.blit(txt_vague, txt_vague.get_rect(center=(s(960), s(400))))
+            txt_score_go = font_sub.render(f"Score : {score}", True, blanc)
+            surface_jeu.blit(txt_score_go, txt_score_go.get_rect(center=(s(960), s(450))))
+
+        bouton_rejouer = button(blanc, "REJOUER", 660, 520, 300, 80, noir, font, 2)
+        bouton_menu_go = button(blanc, "MENU", 1060, 520, 300, 80, noir, font, 2)
+
+    fenetre_largeur, fenetre_hauteur = ecran.get_size()
+    ratio_x = fenetre_largeur / l
+    ratio_y = fenetre_hauteur / h
+    ratio = min(ratio_x, ratio_y)
+    nouvelle_largeur = int(l * ratio)
+    nouvelle_hauteur = int(h * ratio)
+    surface_scale = pygame.transform.smoothscale(surface_jeu, (nouvelle_largeur, nouvelle_hauteur))
+    x = (fenetre_largeur - nouvelle_largeur) // 2
+    y = (fenetre_hauteur - nouvelle_hauteur) // 2
+    ecran.fill((0, 0, 0))
+    ecran.blit(surface_scale, (x, y))
+    pygame.display.flip()
+
+def dessiner_carte(cam_x, cam_y):
+    if not carte_actuelle or not carte_actuelle[0]:
+        return
+    col_min = max(0, cam_x // TAILLE_TUILE)
+    col_max = min(len(carte_actuelle[0]), (cam_x + screen_width) // TAILLE_TUILE + 1)
+    lig_min = max(0, cam_y // TAILLE_TUILE)
+    lig_max = min(len(carte_actuelle), (cam_y + screen_height) // TAILLE_TUILE + 1)
+
+    for lig in range(lig_min, lig_max):
+        for col in range(col_min, col_max):
+            tuile = carte_actuelle[lig][col]
+            image_a_dessiner = images_tuiles.get(tuile) 
+            
+            if image_a_dessiner is not None:
+                surface_jeu.blit(
+                    image_a_dessiner,
+                    (col * TAILLE_TUILE - cam_x, lig * TAILLE_TUILE - cam_y)
+                )
+
+def dessiner_jeu():
+    global timer_visuel_attaque, boss_anim_spawn
+    cam_x, cam_y = calcul_camera(joueur, carte_actuelle)
+    couleur_fond_themes = {
+        "foret":    (10, 20, 10),
+        "desert":   (120, 90, 30),
+        "ile":      (0, 60, 100),
+        "montagne": (80, 80, 100),
+        "espace":   (5, 5, 20),
+    }
+    surface_jeu.fill(couleur_fond_themes.get(theme_actuel, noir))
+    
+    if theme_actuel == "espace":
+        surface_jeu.blit(fond_espace, (-cam_x, -cam_y))
+    else:
+        dessiner_carte(cam_x, cam_y)
+
+    mx, my = souris_vers_jeu(pygame.mouse.get_pos())
+    mx += cam_x
+    my += cam_y
+
+    stats = armes_stats[arme_actuelle]
+
+    if mode_infini:
+        portee    = stats["portee"]  * mult_portee
+        angle_deg = min(179, stats["angle"] * mult_angle)
+    else:
+        portee    = stats["portee"]
+        angle_deg = stats["angle"]
+
+    dx = mx - joueur["x"]
+    dy = my - joueur["y"]
+    distance = (dx**2 + dy**2) ** 0.5
+
+    if distance != 0:
+        dx /= distance
+        dy /= distance
+
+    angle_base = math.atan2(dy, dx)
+    angle_rad = math.radians(angle_deg)
+
+    cache_key = (joueur["x"], joueur["y"], round(mx, 1), round(my, 1), arme_actuelle, round(mult_angle, 2))
+    if _cone_cache["key"] != cache_key:
+        points = [(joueur["x"], joueur["y"])]
+        nb_points = 20
+        for i in range(nb_points + 1):
+            angle = angle_base - angle_rad / 2 + (angle_rad * i / nb_points)
+            x = joueur["x"] + math.cos(angle) * portee
+            y = joueur["y"] + math.sin(angle) * portee
+            points.append((x, y))
+        _cone_cache["key"] = cache_key
+        _cone_cache["points"] = points
+    else:
+        points = _cone_cache["points"]
+
+    surface_alpha.fill((0, 0, 0, 0))
+
+    # Couleur du cone selon l'arme (12 armes)
+    couleurs_armes = {
+        "poing":    (255, 200, 100, 80),
+        "gourdin":  (180, 140, 80,  80),
+        "dague":    (255, 255, 80,  80),
+        "epee":     (150, 220, 255, 80),
+        "faux":     (100, 255, 200, 80),
+        "lance":    (100, 255, 150, 80),
+        "hache":    (255, 100, 50,  80),
+        "trident":  (80,  200, 255, 80),
+        "arbalete": (200, 100, 255, 80),
+        "marteau":  (220, 50,  255, 80),
+        "foudre":   (255, 255, 0,   120),
+        "katana":   (255, 50,  100, 80),
+    }
+    couleur = couleurs_armes.get(arme_actuelle, (200, 200, 200, 80))
+    # Le cone du katana devient plus rouge avec les stacks de fureur
+    if arme_actuelle == "katana" and fureur_stacks > 0:
+        intensite = min(255, 50 + fureur_stacks * 40)
+        couleur   = (255, intensite, 0, 80 + fureur_stacks * 15)
+
+    points_cam = [(x - cam_x, y - cam_y) for x, y in points]
+    pygame.draw.polygon(surface_alpha, couleur, points_cam)
+    surface_jeu.blit(surface_alpha, (0, 0))
+
+    if joueur["etat_anim"] == "attaque":
+        cle = f"attaque_{joueur['direction']}"
+    elif joueur["en_mouvement"]:
+        cle = joueur["direction"]
+    else:
+        cle = f"idle_{joueur['direction']}"
+
+    img_joueur = frames_joueur[cle][joueur["frame_actuelle"]]
+    surface_jeu.blit(img_joueur, (
+        int(joueur["x"] - cam_x - img_joueur.get_width() // 2),
+        int(joueur["y"] - cam_y - img_joueur.get_height() // 2)
+    ))
+
+    if mode_infini:
+        cd_max = int(stats["cooldown"] * mult_cooldown)
+    else:
+        cd_max = stats["cooldown"]
+    if cd_max < 1:
+        cd_max = 1
+    ratio = 1 - (timer_attaque / cd_max) if cd_max > 0 else 1
+    largeur_max = 50
+    x_barre = joueur["x"] - cam_x - largeur_max // 2
+    y_barre = joueur["y"] - cam_y - 40
+    pygame.draw.rect(surface_jeu, (50, 50, 50), (x_barre, y_barre, largeur_max, 6))
+    pygame.draw.rect(surface_jeu, (0, 200, 255), (x_barre, y_barre, int(largeur_max * ratio), 6))
+
+    hp_ratio = joueur["hp"] / joueur["hp_max"]
+    x_barre = joueur["x"] - cam_x - largeur_max // 2
+    y_barre = joueur["y"] - cam_y - 55
+    pygame.draw.rect(surface_jeu, (60, 0, 0), (x_barre, y_barre, largeur_max, 6))
+    pygame.draw.rect(surface_jeu, (0, 255, 0), (x_barre, y_barre, int(largeur_max * hp_ratio), 6))
+
+    for ennemi in ennemis:
+        x = ennemi["x"] - cam_x
+        y = ennemi["y"] - cam_y
+
+        if x < -100 or x > screen_width + 100 or y < -100 or y > screen_height + 100:
+            continue
+
+        hp_e = ennemi["hp"]
+        hp_max_e = ennemi["hp_max"]
+
+        ennemi["timer_anim"] += 1
+        if ennemi["timer_anim"] >= 8:
+            ennemi["timer_anim"] = 0
+            ennemi["frame_actuelle"] = (ennemi["frame_actuelle"] + 1) % NB_FRAMES
+
+        direction = ennemi.get("direction", "devant")
+        img_frame = ennemi["frames"][direction][ennemi["frame_actuelle"]]
+
+        if ennemi["en_spawn"]:
+            t = max(1, ennemi["taille_spawn"])
+            img_scaled = pygame.transform.smoothscale(img_frame, (t, t))
+            surface_jeu.blit(img_scaled, (x - t // 2, y - t // 2))
+        else:
+            surface_jeu.blit(img_frame, (x - img_frame.get_width() // 2, y - img_frame.get_height() // 2))
+
+        if ennemi["timer_hit"] > 0:
+            img_hit = img_frame.copy()
+            img_hit.fill((255, 0, 0, 120), special_flags=pygame.BLEND_RGBA_MULT)
+            surface_jeu.blit(img_hit, (x - img_frame.get_width() // 2, y - img_frame.get_height() // 2))
+            ennemi["timer_hit"] -= 1
+
+        ratio_e = hp_e / hp_max_e
+        largeur_max_e = s(40) + hp_max_e
+        largeur_e = int(ratio_e * largeur_max_e)
+        if ratio_e > 0.6: couleur_e = (0, 200, 0)
+        elif ratio_e > 0.3: couleur_e = (230, 180, 0)
+        else: couleur_e = (200, 0, 0)
+        pygame.draw.rect(surface_jeu, (60, 0, 0), (x - largeur_max_e // 2, y - int(30 * SCALE), largeur_max_e, int(5 * SCALE)))
+        pygame.draw.rect(surface_jeu, couleur_e, (x - largeur_max_e // 2, y - int(30 * SCALE), largeur_e, int(5 * SCALE)))
+
+    if boss_anim_spawn < 180:
+        boss_anim_spawn += 1
+
+    if boss_actif:
+        b = boss_actif
+        bx = b["x"] - cam_x
+        by = b["y"] - cam_y
+
+        # Sélection de la frame selon le type de boss
+        if b["type"] == "chamane":
+            cle_anim = b["direction"]  # "devant", "dos", "gauche", "droite"
+            if b["timer_hit"] > 0:
+                cle_anim = f"attaque_{b['direction']}"
+            frames_list = b["frames"].get(cle_anim, b["frames"]["devant"])
+        elif b["type"] == "troll":
+            frames_list = b["frames"]["hit"] if b["timer_hit"] > 0 else b["frames"]["walk"]
+        else:  # roi
+            frames_list = b["frames"]["hit"] if b["timer_hit"] > 0 else b["frames"]["walk"]
+
+        nb_frames_b = len(frames_list)
+
+        if b["en_spawn"]:
+            t = max(1, b["taille_spawn"])
+            img = pygame.transform.smoothscale(frames_list[0], (t, t))
+            surface_jeu.blit(img, (bx - t//2, by - t//2))
+        else:
+            idx = b["frame_actuelle"] % nb_frames_b
+            img = frames_list[idx]
+            surface_jeu.blit(img, (bx - img.get_width()//2, by - img.get_height()//2))
+            if b["timer_hit"] > 0:
+                img_hit = img.copy()
+                img_hit.fill((255, 0, 0, 150), special_flags=pygame.BLEND_RGBA_MULT)
+                surface_jeu.blit(img_hit, (bx - img.get_width()//2, by - img.get_height()//2))
+                b["timer_hit"] -= 1
+        
+        # Barre de vie boss (toujours affichée dès que le boss existe)
+        barre_w, barre_h = 600, 30
+        barre_x = (l - barre_w) // 2
+        barre_y = 30
+        pygame.draw.rect(surface_jeu, (20, 0, 0), (barre_x - 4, barre_y - 4, barre_w + 8, barre_h + 8), border_radius=6)
+        pygame.draw.rect(surface_jeu, (60, 0, 0), (barre_x, barre_y, barre_w, barre_h), border_radius=4)
+        ratio_boss = max(0, b["hp"] / b["hp_max"])
+        pygame.draw.rect(surface_jeu, b["teinte"], (barre_x, barre_y, int(barre_w * ratio_boss), barre_h), border_radius=4)
+        nom_txt = font_hud.render(b["nom"], True, blanc)
+        surface_jeu.blit(nom_txt, nom_txt.get_rect(center=(l // 2, barre_y + barre_h + 20)))
+        # Texte HP
+        hp_txt = font_hud.render(f"{max(0, int(b['hp']))} / {b['hp_max']}", True, blanc)
+        surface_jeu.blit(hp_txt, hp_txt.get_rect(center=(l // 2, barre_y + barre_h + 45)))
+        # Animation d'entrée
+        if boss_anim_spawn < 180:
+            alpha_pulse = int(abs(math.sin(boss_anim_spawn * 0.05)) * 255)
+            surf_txt = font_police.render(f"{b['nom']}", True, b["teinte"])
+            surf_txt.set_alpha(alpha_pulse)
+            surface_jeu.blit(surf_txt, surf_txt.get_rect(center=(l // 2, h // 2 - 100)))
+
+    for obj in objectifs_points:
+        pulse = 1.0
+        if obj["hp"] / obj["hp_max"] < 0.3:
+            pulse = 1.0 + math.sin(pygame.time.get_ticks() * 0.01) * 0.15
+        taille_obj = int(TAILLE_TUILE * pulse)
+        pygame.draw.rect(surface_jeu, (255, 215, 0),
+            (obj["x"] - cam_x - taille_obj // 2, obj["y"] - cam_y - taille_obj // 2, taille_obj, taille_obj))
+        pygame.draw.rect(surface_jeu, (200, 0, 0), (obj["x"] - 50 - cam_x, obj["y"] - 60 - cam_y, 100, 10))
+        largeur_vie_obj = (obj["hp"] / obj["hp_max"]) * 100
+        pygame.draw.rect(surface_jeu, (0, 200, 0), (obj["x"] - 50 - cam_x, obj["y"] - 60 - cam_y, largeur_vie_obj, 10))
+
+    for p in particules:
+        pygame.draw.circle(surface_jeu, p["couleur"],
+            (int(p["x"] - cam_x), int(p["y"] - cam_y)), 4)
+        
+    # Dessin des bulles de bonus
+    for b in bulles:
+        # Effet pulse : la bulle grossit et rétrécit légèrement
+        pulse = math.sin(b["timer_pulse"] * 0.08) * 4
+        rayon_affiche = int(b["rayon"] + pulse)
+
+        bx = int(b["x"] - cam_x)
+        by = int(b["y"] - cam_y)
+
+        # Cercle extérieur semi-transparent
+        surf_bulle = pygame.Surface((rayon_affiche * 2 + 6, rayon_affiche * 2 + 6), pygame.SRCALPHA)
+        pygame.draw.circle(surf_bulle, (*b["couleur"], 60),
+                           (rayon_affiche + 3, rayon_affiche + 3), rayon_affiche + 3)
+        pygame.draw.circle(surf_bulle, (*b["couleur"], 200),
+                           (rayon_affiche + 3, rayon_affiche + 3), rayon_affiche, 3)
+        surface_jeu.blit(surf_bulle, (bx - rayon_affiche - 3, by - rayon_affiche - 3))
+
+        # Label au-dessus
+        txt_b = font_hud.render(b["label"], True, b["couleur"])
+        surface_jeu.blit(txt_b, txt_b.get_rect(center=(bx, by - rayon_affiche - 14)))
+
+        # Indicateur de durée de vie (barre fine)
+        ratio_vie = b["duree_vie"] / 600
+        pygame.draw.rect(surface_jeu, (60, 60, 60),
+                         (bx - 20, by + rayon_affiche + 6, 40, 4))
+        pygame.draw.rect(surface_jeu, b["couleur"],
+                         (bx - 20, by + rayon_affiche + 6, int(40 * ratio_vie), 4))
+
+    for d in degats_flottants:
+        texte = font_dmg.render(d["texte"], True, d["couleur"])
+        surface_jeu.blit(texte, (int(d["x"] - cam_x - texte.get_width() // 2), int(d["y"] - cam_y)))
+
+    # ---- HUD toujours au premier plan ----
+    texte_vague = font_hud.render(f"Vague : {vague_actuelle} / {nb_vagues_total}", True, blanc)
+    surface_jeu.blit(texte_vague, (s(20), s(90)))
+
+    if mode_infini:
+        txt_inf = font_hud.render(f"Run infini - vague {numero_vague_infinie}", True, (255, 180, 50))
+        surface_jeu.blit(txt_inf, (s(20), s(130)))
+        txt_arg_inf = font_hud.render(f"Pieces : {argent_infini}", True, (255, 215, 0))
+        surface_jeu.blit(txt_arg_inf, (s(20), s(170)))
+        txt_score_inf = font_hud.render(f"Score : {score}", True, blanc)
+        surface_jeu.blit(txt_score_inf, (s(20), s(210)))
+        txt_arme = font_hud.render(f"Arme : {arme_actuelle.upper()}", True, (200, 200, 255))
+        surface_jeu.blit(txt_arme, (s(20), s(250)))
+        if boss_type_niveau and not boss_spawne:
+            txt_boss_hud = font_hud.render("! BOSS EN CHEMIN !", True, (255, 50, 50))
+            surface_jeu.blit(txt_boss_hud, txt_boss_hud.get_rect(center=(s(960), s(55))))
+    else:
+        texte_ennemis = font_hud.render(f"Ennemis : {len(ennemis)}", True, blanc)
+        surface_jeu.blit(texte_ennemis, (s(20), s(130)))
+        texte_score = font_hud.render(f"Score : {score}", True, blanc)
+        surface_jeu.blit(texte_score, (s(20), s(170)))
+        texte_argent_hud = font_hud.render(f"Argent : {argent}", True, blanc)
+        surface_jeu.blit(texte_argent_hud, (s(20), s(210)))
+        txt_arme_hist = font_hud.render(f"Arme : {arme_actuelle.upper()}", True, (200, 200, 255))
+        surface_jeu.blit(txt_arme_hist, (s(20), s(250)))
+    
+    if timer_boost_degats_bulle > 0:
+        ratio_bulle = timer_boost_degats_bulle / DUREE_BOOST_DEGATS_BULLE
+        txt_boost_b = font_hud.render(
+            f"DMG BULLE +{int((boost_degats_bulle - 1) * 100)}%  ({timer_boost_degats_bulle // 60 + 1}s)",
+            True, (255, 200, 50)
+        )
+        surface_jeu.blit(txt_boost_b, (s(20), s(320)))
+        # Barre de durée
+        pygame.draw.rect(surface_jeu, (50, 40, 0), (s(20), s(345), 160, 6))
+        pygame.draw.rect(surface_jeu, (255, 200, 50), (s(20), s(345), int(160 * ratio_bulle), 6))
+
+    couleurs_effets_hud = {
+        "combo": (255, 200, 0), "recul": (200, 150, 255), "saignement": (220, 50, 50),
+        "critique": (255, 140, 0), "marquage": (255, 80, 200), "tranchant": (255, 80, 0),
+        "ralentissement": (100, 180, 255), "poison": (80, 220, 80), "onde": (255, 180, 50),
+        "surcharge": (255, 255, 50), "fureur": (255, 80, 30),
+    }
+    effet_nom_hud = armes_stats[arme_actuelle].get("effet", "")
+    effet_desc_hud = armes_stats[arme_actuelle].get("effet_desc", "")
+    if effet_desc_hud:
+        coul_e = couleurs_effets_hud.get(effet_nom_hud, (200, 200, 200))
+        txt_effet_hud = font_hud.render(f"[ {effet_desc_hud} ]", True, coul_e)
+        surface_jeu.blit(txt_effet_hud, (s(20), s(285)))
+
+    if effet_nom_hud == "combo" and combo_poing > 0:
+        txt_combo = font_sub.render(f"Combo : {combo_poing}/3", True, (255, 200, 0))
+        surface_jeu.blit(txt_combo, txt_combo.get_rect(center=(s(960), s(155))))
+
+    # --- HUD FUREUR SANGUINE (katana) ---
+    if effet_nom_hud == "fureur":
+        if fureur_stacks > 0:
+            ratio_fureur  = timer_fureur / DUREE_FUREUR
+            rouge   = 255
+            vert    = max(0, 150 - fureur_stacks * 25)
+            couleur_stack = (rouge, vert, 0)
+            txt_fureur = font_sub.render(
+                f"Fureur : {fureur_stacks}/5  (+{fureur_stacks * 15}%)",
+                True, couleur_stack)
+            surface_jeu.blit(txt_fureur, txt_fureur.get_rect(center=(s(960), s(155))))
+            largeur_barre = 220
+            x_barre_f = s(960) - largeur_barre // 2
+            y_barre_f = s(175)
+            pygame.draw.rect(surface_jeu, (60, 20, 0),   (x_barre_f, y_barre_f, largeur_barre, 8))
+            pygame.draw.rect(surface_jeu, couleur_stack, (x_barre_f, y_barre_f, int(largeur_barre * ratio_fureur), 8))
+            if fureur_stacks >= 3:
+                reduction_cd = (fureur_stacks - 2) * 5
+                txt_cd = font_hud.render(f"CD -{reduction_cd}%", True, (100, 200, 255))
+                surface_jeu.blit(txt_cd, txt_cd.get_rect(center=(s(960), s(192))))
+        else:
+            txt_no_stack = font_hud.render("Tuez des ennemis pour activer la Fureur !", True, (150, 80, 50))
+            surface_jeu.blit(txt_no_stack, txt_no_stack.get_rect(center=(s(960), s(160))))
+
+    if timer_message_effet > 0:
+        alpha_msg = min(255, timer_message_effet * 6)
+        surf_msg = font_police.render(message_effet, True, (255, 220, 50))
+        surf_msg.set_alpha(alpha_msg)
+        surface_jeu.blit(surf_msg, surf_msg.get_rect(center=(s(960), s(200))))
+
+
+# Boucle principale
+continuer = True
+etat = "menu1"
+
+while continuer:
+    gerer_evenements()
+    verifier_changement_theme()
+
+    if etat == "niveau":
+        mettre_a_jour()
+
+    afficher()
+
+    horloge.tick(60)
+
+if slot_actuel != 0:
+    sauvegarder(slot_actuel)
+pygame.quit()

@@ -1,0 +1,1539 @@
+import pygame
+import random
+import os
+import math
+slot_actuel = 0
+def sauvegarder(slot):
+    global niveau_max, argent, arme1_debloquee
+    # Sécurité : on ne sauvegarde pas si le slot n'est pas défini (0)
+    if slot == 0: 
+        return
+    try:
+        with open(f"save{slot}.txt", "w") as f:
+            f.write(f"{niveau_max}\n")
+            f.write(f"{argent}\n")
+            f.write(f"{int(arme1_debloquee)}\n")
+        print(f"Sauvegarde réussie dans le slot {slot}")
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde : {e}")
+
+def charger(slot):
+    global niveau_max, argent, arme1_debloquee, slot_actuel
+    slot_actuel = slot
+    try:
+        with open(f"save{slot}.txt", "r") as f:
+            lignes = f.readlines()
+            niveau_max = int(lignes[0].strip())
+            argent = int(lignes[1].strip())
+            arme1_debloquee = bool(int(lignes[2].strip()))
+        print(f"Slot {slot} chargé : Niveau {niveau_max}, Argent {argent}")
+    except:
+        print(f"Pas de fichier save{slot}.txt, initialisation par défaut.")
+        niveau_max = 1
+        argent = 0
+        arme1_debloquee = 0
+
+    niveau_max = max(1, niveau_max)
+
+def recuperer_infos_save(slot):
+    try:
+        with open(f"save{slot}.txt", "r") as f:
+            lignes = f.readlines()
+            if len(lignes) >= 3:
+                niv = lignes[0].strip()
+                arg = lignes[1].strip()
+                etat_arme_shop = int(lignes[2].strip())
+
+                nb_total = 1 + etat_arme_shop
+                
+                return {"niv": niv, "argent": arg, "nb": nb_total}
+    except:
+        return None
+    return None
+
+pygame.init()
+l = 1920
+h = 1080
+fond = pygame.image.load("images/niveau_noel/sapin.png")
+fond = pygame.transform.smoothscale(fond, (l, h))
+#pygame.mixer.music.load("assets/music.mp3")
+#pygame.mixer.music.play(-1)
+
+BASE_L = 1920
+BASE_H = 1080
+ecran = pygame.display.set_mode((l, h), pygame.RESIZABLE)
+SCALE = min(ecran.get_width()/BASE_L, ecran.get_height()/BASE_H)
+pygame.display.set_caption("The Goblin Game")
+surface_jeu = pygame.Surface((l, h)).convert()
+
+
+bon_bleu = (10, 20, 40)
+blanc = (255, 255, 255)
+noir = (0, 0, 0)
+gris = (125, 125, 125)
+
+bouton_save1 = None
+bouton_save2 = None
+bouton_save3 = None
+score = 0
+argent = 0
+vague = 1
+
+font = pygame.font.Font(None,48 )
+
+arme1_debloquee = 0
+derniere_pos_souris_jeu = (0, 0)
+
+prix_arme1 = 500
+prix_arme2 = 750
+
+numero_niveau = 1
+boutons_niveaux = []
+bouton_menu = None
+bouton_shop = None
+bouton_sel_niveau = None
+bouton_succes = None
+bouton_jouer = None
+bouton_quitter = None
+bouton_ecran_titre = None
+bouton_sel_niveau_special = None
+bouton_arme1 = None
+bouton_credits = None
+bouton_rejouer = None
+bouton_menu_go = None
+bouton_suite = None
+niveau_max = 1
+
+vitesse = 1
+timer_attaque = 0
+
+# Variables globales de base
+objectif = 1000  # valeur par défaut pour éviter l'erreur NameError
+
+
+niveaux = [
+    {"objectif": 1000, "delai_ennemi": 90, "vitesse": 1},
+    {"objectif": 1500, "delai_ennemi": 80, "vitesse": 1},
+    {"objectif": 2000, "delai_ennemi": 70, "vitesse": 2},
+    {"objectif": 2500, "delai_ennemi": 60, "vitesse": 2},
+    {"objectif": 3000, "delai_ennemi": 90, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 80, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 70, "vitesse": 4},
+    {"objectif": 3500, "delai_ennemi": 60, "vitesse": 4},
+    {"objectif": 3500, "delai_ennemi": 90, "vitesse": 2},
+    {"objectif": 3500, "delai_ennemi": 80, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 70, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 60, "vitesse": 4},
+    {"objectif": 3500, "delai_ennemi": 90, "vitesse": 2},
+    {"objectif": 3500, "delai_ennemi": 80, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 70, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 60, "vitesse": 4},
+    {"objectif": 3500, "delai_ennemi": 90, "vitesse": 2},
+    {"objectif": 3500, "delai_ennemi": 80, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 70, "vitesse": 3},
+    {"objectif": 3500, "delai_ennemi": 60, "vitesse": 4},
+    ]
+
+# --- LE JOUEUR ---
+joueur = {
+    "x": 960, "y": 540, # Position de départ (milieu)
+    "vitesse": 5,
+    "taille": 40,
+    "hp": 100,
+    "portee_attaque": 80, # Distance pour toucher les ennemis
+    "degats": 10,
+    "direction": "devant",   
+    "frame_actuelle": 0,
+    "etat_anim": "idle",
+    "timer_anim": 0,
+    "en_mouvement": False 
+}
+
+# --- LES OBJECTIFS (Les points à protéger) ---
+# On utilise une liste car tu as dit qu'il y en aurait peut-être plusieurs plus tard
+objectifs_points = [
+    {"x": 960, "y": 288, "hp": 500, "hp_max": 500} # Le point doré (tuile 2)
+]
+
+armes_stats = {
+    "arc": {"portee": 120, "angle": 80, "degats": 10, "cooldown": 10},
+    "shotgun": {"portee": 90, "angle": 100, "degats": 8, "cooldown": 20},
+    "laser": {"portee": 200, "angle": 20, "degats": 15, "cooldown": 5}
+}
+
+arme_actuelle = "arc"
+'''
+img_lutin = pygame.image.load("images/niveau_noel/vlutin.png").convert_alpha()
+img_lutin = pygame.transform.scale(img_lutin, (80, 80))
+'''
+gobelin_img = pygame.image.load("images/gobelin.png").convert_alpha()
+gobelin_img = pygame.transform.smoothscale(gobelin_img, (int(40*SCALE), int(40*SCALE)))
+img_pn = pygame.image.load("images/niveau_noel/pere_noel.png").convert_alpha()
+img_pn = pygame.transform.smoothscale(img_pn, (int(70*SCALE), int(70*SCALE)))
+img_bdn = pygame.image.load("images/niveau_noel/bonhomme_de_neige.png").convert_alpha()
+img_bdn = pygame.transform.smoothscale(img_bdn, (int(70*SCALE), int(70*SCALE)))
+
+types_gobelins = { 
+    "foret": [
+    {"taille": 35, "hp": 10, "type": "feu", "score": 50, "argent": 1, "poids": 20, "vitesse": 4},  # petit
+    {"taille": 50, "hp": 20, "type": "feu", "score": 100, "argent": 3, "poids": 60, "vitesse": 2},  # normal
+    {"taille": 65, "hp": 35, "type": "feu", "score": 150, "argent": 5, "poids": 30, "vitesse": 2},  # grand
+    {"taille": 85, "hp": 60, "type": "feu", "score": 200, "argent": 10, "poids": 15, "vitesse": 2}   # chef
+]
+}
+
+type_gobelin_actuel = "foret"
+
+couleurs = [
+    (255, 0, 0),     # rouge
+    (0, 255, 0),     # vert
+    (255, 255, 0),   # jaune
+    (0, 0, 255),      # bleu
+    (255, 255, 255)  # blanc
+    ]
+'''
+nb_flocons = 100
+flocons = []
+hp = 0
+
+for i in range(nb_flocons):
+        x = random.randint(0, l)
+        y = random.randint(0, h)
+        v_flocon = random.randint(1, 3)
+        flocons.append([x, y, v_flocon])
+'''
+ennemis = []
+particules = []
+degats_flottants = []
+
+timer_ennemi = 0
+delai_ennemi = 90 
+scroll_sel_niveau = 0
+scroll_shop = 0
+
+timer_difficulte = 0
+
+horloge = pygame.time.Clock()
+
+timer_visuel_attaque = 0 # Pour faire briller le cercle d'attaque
+
+#Fonctions d'aides
+
+def charger_niveau(numero):
+    global delai_ennemi, score, ennemis, vitesse, objectif, vague
+    global carte_actuelle, theme_actuel
+
+    niveau = niveaux[numero-1]
+    
+    if numero <= 10:
+        theme_actuel = "foret"
+    else:
+        theme_actuel = "ville"
+    
+    carte_actuelle = charger_ma_carte(maps[theme_actuel])
+
+    vague = 1
+    delai_ennemi = niveau["delai_ennemi"]
+    vitesse = niveau["vitesse"]
+    objectif = niveau["objectif"]
+    score = 0
+    ennemis.clear()
+
+    # ← AJOUTS : réinitialiser joueur et objectif à protéger
+    joueur["hp"] = 100
+    joueur["x"] = 960
+    joueur["y"] = 540
+    joueur["direction"] = "devant"
+    joueur["frame_actuelle"] = 0
+    joueur["timer_anim"] = 0
+    joueur["en_mouvement"] = False
+
+    objectifs_points[0]["hp"] = 500
+    objectifs_points[0]["hp_max"] = 500
+
+def button(color, txt, pos_x, pos_y, width, height, color_txt, font, around=0):
+    """Crée un bouton et centre automatiquement le texte à l'intérieur."""
+    # 1. Dessiner le rectangle de fond
+    rect = pygame.draw.rect(surface_jeu, color, [int(pos_x*SCALE), int(pos_y*SCALE), int(width*SCALE), int(height*SCALE)])
+    
+    # 2. Rendre le texte
+    txt_button = font.render(txt, True, color_txt)
+    pos_txt = txt_button.get_rect()
+    
+    # 3. La magie : on dit à Pygame de centrer le texte par rapport au rectangle qu'on vient de dessiner !
+    pos_txt.center = rect.center 
+    surface_jeu.blit(txt_button, pos_txt)
+    
+    # 4. Le contour (optionnel)
+    if around != 0:
+        pygame.draw.rect(surface_jeu, color, [int(pos_x*SCALE), int(pos_y*SCALE), int(width*SCALE), int(height*SCALE)], around)
+        
+    return rect
+
+def ennemi_colore(image, couleur):
+    img = image.copy()
+    img.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)
+    return img
+
+def calcul_camera(joueur, carte_actuelle):
+    """
+    Calcule la position de la caméra pour suivre le joueur.
+    La caméra est centrée sur le joueur mais reste dans les limites de la carte.
+    Retourne (cam_x, cam_y) en pixels.
+    """
+    cam_x = joueur["x"] - screen_width // 2
+    cam_y = joueur["y"] - screen_height // 2
+
+    largeur_carte = len(carte_actuelle[0]) * TAILLE_TUILE
+    hauteur_carte = len(carte_actuelle) * TAILLE_TUILE
+
+    # On bloque la caméra aux limites de la carte
+    cam_x = max(0, min(cam_x, largeur_carte - screen_width))
+    cam_y = max(0, min(cam_y, hauteur_carte - screen_height))
+
+    return cam_x, cam_y
+
+def creer_ennemi():
+    global ennemis
+    
+    liste_disponible = types_gobelins[type_gobelin_actuel]
+    # 1. Gestion des probabilités
+    # On crée une liste contenant uniquement les poids : [60, 25, 10, 5]
+    poids = [m["poids"] for m in liste_disponible]
+    
+    # Tirage au sort probabiliste
+    config = random.choices(liste_disponible, weights=poids, k=1)[0]
+
+    # 2. Positionnement
+    # Trouver toutes les cases spawn (3)
+    spawns = []
+    for y_map, ligne in enumerate(carte_actuelle):
+        for x_map, tuile in enumerate(ligne):
+            if tuile == 3:
+                spawns.append((x_map, y_map))
+
+    # Choisir un spawn aléatoire
+    if spawns:
+        col, lig = random.choice(spawns)
+        x = col * TAILLE_TUILE
+        y = lig * TAILLE_TUILE
+    else:
+        x = 500
+        y = 500
+
+    # 3. Préparation de l'image (Scale et Couleur)
+    # On part de l'image de base et on l'adapte à la taille définie dans le dictionnaire
+    # Taille selon le config (utilise la taille du dictionnaire)
+    taille_sprite = int(config["taille"] * SCALE)
+
+    # Teinte selon le type ET la taille pour les différencier
+    if config["type"] == "feu":
+        if config["taille"] == 35:
+            teinte = (255, 180, 100)   # orange clair = petit
+        elif config["taille"] == 50:
+            teinte = (255, 100, 50)    # orange vif = normal
+        elif config["taille"] == 65:
+            teinte = (220, 50, 50)     # rouge = grand
+        else:
+            teinte = (150, 0, 0)       # rouge foncé = chef
+    else:
+        teinte = (255, 255, 255)       # blanc par défaut
+    
+    frames_precalculees = {}
+    for direction, liste_frames in frames_ennemi.items():
+        frames_precalculees[direction] = []
+        for frame in liste_frames:
+            f = pygame.transform.smoothscale(frame, (taille_sprite, taille_sprite))
+            f = ennemi_colore(f, teinte)
+            frames_precalculees[direction].append(f)
+
+    # On prend la frame "devant" comme base pour l'image stockée (non utilisée pour l'anim mais garde la cohérence)
+    img_base = frames_ennemi["devant"][0].copy()
+    img_base = pygame.transform.smoothscale(img_base, (taille_sprite, taille_sprite))
+    img_finale = ennemi_colore(img_base, teinte)
+    # Création du dictionnaire du ennemi "vivant"
+    nouveau_ennemi = {
+        "x": x,
+        "y": y,
+        "img": img_finale,
+        "taille_sprite": taille_sprite,
+        "teinte": teinte,
+        "frames": frames_precalculees,
+        "hp": config["hp"],
+        "hp_max": config["hp"],
+        "type": config["type"], # Futur : servira pour les faiblesses
+        "score": config["score"],
+        "argent": config["argent"],
+        "vitesse": config["vitesse"], # On peut même varier la vitesse par type !
+        "timer_anim": random.randint(0, 20),  # décalage pour que tous ne bougent pas pareil
+        "frame_actuelle": 0,
+        "timer_anim": 0,
+        "direction": "devant",
+        "timer_hit": 0,
+        "taille_spawn": 0,   # pour l'effet spawn
+        "en_spawn": True,
+
+    }
+    
+    ennemis.append(nouveau_ennemi)
+
+
+# --- MOTEUR DE CARTE (TILEMAP) ---
+TAILLE_TUILE_BASE = 64
+TAILLE_TUILE = int(TAILLE_TUILE_BASE * SCALE) # S'adapte à la taille de ton écran !
+# --- Variables globales pour la carte ---
+tile_size = TAILLE_TUILE      # taille d'une tuile à l'écran
+screen_width = l              # largeur de l'écran
+screen_height = h             # hauteur de l'écran
+SOLIDES = [1, 4, 5]           # liste des tuiles bloquantes : mur, bas arbre, haut arbre
+# Dictionnaire de nos tuiles. 
+# Pour l'instant on met des couleurs, tu remplaceras par pygame.image.load(...) plus tard.
+images_tuiles = {
+    0: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 0 = Sol (Vert)
+    1: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 1 = Mur/Obstacle (Gris)
+    2: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 2 = Objectif à protéger (Or)
+    3: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 3 = Spawn Ennemis (Rouge)
+    4: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 4 = bas arbre
+    5: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), # 5 = haut arbre
+    6: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), 
+    7: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)),
+    8: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)),
+    9: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)), 
+    10: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)),
+    11: pygame.Surface((TAILLE_TUILE, TAILLE_TUILE)),
+
+}
+images_tuiles[0]= pygame.image.load("images/images_map/herbe.png")
+images_tuiles[1].fill((120, 120, 120)) # Mur
+images_tuiles[2].fill((255, 215, 0))   # Objectif
+images_tuiles[3].fill((139, 0, 0))     # Spawn
+images_tuiles[4]= pygame.image.load("images/images_map/arbre_bas.png")
+images_tuiles[5]= pygame.image.load("images/images_map/arbre_haut.png")
+images_tuiles[6]= pygame.image.load("images/images_map/fleurs_rouges.png")
+images_tuiles[7]= pygame.image.load("images/images_map/fleurs_blanches.png")
+images_tuiles[8]= pygame.image.load("images/images_map/fleurs_bleues.png")
+images_tuiles[9]= pygame.image.load("images/images_map/basse_herbe.png")
+images_tuiles[10]= pygame.image.load("images/images_map/haute_herbe.png")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SOLIDES = [1, 4]
+spritesheet_ennemi_feu = pygame.image.load("images/image_animation/ennemi_feu.png").convert_alpha()
+spritesheet_joueur = pygame.image.load("images/image_animation/joueur.png").convert_alpha()
+FRAME_W = 64  # largeur d'une frame
+FRAME_H = 64  # hauteur d'une frame
+FRAME_W_J = 128
+FRAME_H_J = 128
+NB_FRAMES = 4
+NB_FRAMES_MARCHE = 6
+NB_FRAMES_ACTION = 4
+frames_ennemi = {}
+frames_joueur = {}
+directions = ["devant", "dos", "gauche", "droite"]
+directions_joueur = ["devant", "devant2", "dos", "gauche"]
+for col, direction in enumerate(directions):
+    frames_ennemi[direction] = []
+    for row in range(NB_FRAMES):
+        frame = spritesheet_ennemi_feu.subsurface((col * FRAME_W, row * FRAME_H, FRAME_W, FRAME_H))
+        frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+        frames_ennemi[direction].append(frame)
+# Ligne 1 (index 0) = repos devant — 6 frames
+frames_joueur["devant"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 3 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["devant"].append(frame)
+
+# Ligne 5 (index 4) = marche côté droit — 6 frames
+frames_joueur["droite"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 4 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["droite"].append(frame)
+frames_joueur["gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["droite"]]
+
+# Ligne 6 (index 5) = marche dos — 6 frames
+frames_joueur["dos"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 5 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["dos"].append(frame)
+
+frames_joueur["idle_devant"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 0 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["idle_devant"].append(frame)
+
+# Ligne 2 (index 1) = repos côté — 6 frames
+frames_joueur["idle_droite"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 1 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["idle_droite"].append(frame)
+frames_joueur["idle_gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["idle_droite"]]
+
+# Ligne 3 (index 2) = repos dos — 6 frames
+frames_joueur["idle_dos"] = []
+for col in range(6):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 2 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["idle_dos"].append(frame)
+
+# Ligne 7 (index 6) = attaque devant — 4 frames
+frames_joueur["attaque_devant"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 6 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["attaque_devant"].append(frame)
+
+# Ligne 8 (index 7) = attaque côté — 4 frames
+frames_joueur["attaque_droite"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 7 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["attaque_droite"].append(frame)
+frames_joueur["attaque_gauche"] = [pygame.transform.flip(f, True, False) for f in frames_joueur["attaque_droite"]]
+
+# Ligne 9 (index 8) = attaque dos — 4 frames
+frames_joueur["attaque_dos"] = []
+for col in range(4):
+    frame = spritesheet_joueur.subsurface((col * FRAME_W_J, 8 * FRAME_H_J, FRAME_W_J, FRAME_H_J))
+    frame = pygame.transform.smoothscale(frame, (int(96*SCALE), int(96*SCALE)))
+    frames_joueur["attaque_dos"].append(frame)
+# La Carte (Matrice). 
+# Pour un écran 1920x1080 avec des tuiles de 64, ça fait 30 colonnes et 17 lignes.
+# Voici une mini-carte d'exemple (j'ai réduit pour que ce soit lisible, on la fera plus grande après)
+def charger_ma_carte(nom_fichier):
+    chemin_fichier = os.path.join(BASE_DIR, nom_fichier)
+    
+    if not os.path.exists(chemin_fichier):
+        print(f"ALERTE : Le fichier {chemin_fichier} n'existe pas !")
+        return [[1, 1, 1], [1, 0, 1], [1, 1, 1]]
+    
+    matrice = []
+    with open(chemin_fichier, "r") as f:
+        for ligne in f:
+            ligne_propre = ligne.strip()
+            if ligne_propre:
+                # Séparation par virgule pour gérer les nombres ≥10
+                matrice.append([int(n) for n in ligne_propre.split(",")])
+    return matrice
+
+maps = {
+    "foret": "carte.txt",
+    "ville": None,
+    "Noel" : None,
+
+}
+theme_actuel = "foret"
+carte_actuelle = charger_ma_carte("carte.txt")
+# Liste des arbres 2 blocs de haut
+# Chaque arbre = {"col": colonne, "ligne_bas": ligne du bloc bas, "ligne_haut": ligne du bloc haut}
+arbres = []
+
+for lig, ligne in enumerate(carte_actuelle):
+    for col, tuile in enumerate(ligne):
+        if tuile == 4:  # bloc bas de l'arbre
+            # On suppose que le bloc haut est juste au-dessus
+            arbres.append({"col": col, "ligne_bas": lig, "ligne_haut": lig-1})
+
+
+if theme_actuel == "grotte":
+    portee_effective = joueur["portee_attaque"] * 0.7  # Réduit de 30%
+else:
+    portee_effective = joueur["portee_attaque"]
+    
+def logique_ennemis():
+    global continuer
+    DISTANCE_AGGRO = 400
+
+    for ennemi in ennemis:
+        # Spawn en cours → on grandit et on skip le déplacement
+        if ennemi["en_spawn"]:
+            ennemi["taille_spawn"] += 3
+            if ennemi["taille_spawn"] >= ennemi["taille_sprite"]:
+                ennemi["taille_spawn"] = ennemi["taille_sprite"]
+                ennemi["en_spawn"] = False
+            continue
+
+        cible_x, cible_y = objectifs_points[0]["x"], objectifs_points[0]["y"]
+        dist_joueur = ((ennemi["x"] - joueur["x"])**2 + (ennemi["y"] - joueur["y"])**2)**0.5
+
+        if dist_joueur < DISTANCE_AGGRO:
+            cible_x, cible_y = joueur["x"], joueur["y"]
+
+        if ennemi["x"] < cible_x: ennemi["x"] += ennemi["vitesse"]
+        elif ennemi["x"] > cible_x: ennemi["x"] -= ennemi["vitesse"]
+        if ennemi["y"] < cible_y: ennemi["y"] += ennemi["vitesse"]
+        elif ennemi["y"] > cible_y: ennemi["y"] -= ennemi["vitesse"]
+
+        dx_dir = cible_x - ennemi["x"]
+        dy_dir = cible_y - ennemi["y"]
+        if abs(dx_dir) > abs(dy_dir):
+            ennemi["direction"] = "droite" if dx_dir > 0 else "gauche"
+        else:
+            ennemi["direction"] = "devant" if dy_dir > 0 else "dos"
+
+        dist_obj = ((ennemi["x"] - objectifs_points[0]["x"])**2 + (ennemi["y"] - objectifs_points[0]["y"])**2)**0.5
+        if dist_obj < 40:
+            objectifs_points[0]["hp"] -= 0.2
+        if dist_joueur < 30:
+            joueur["hp"] -= 0.1
+
+        col = int(ennemi["x"] / TAILLE_TUILE)
+        lig = int(ennemi["y"] / TAILLE_TUILE)
+        if 0 <= lig < len(carte_actuelle) and 0 <= col < len(carte_actuelle[0]):
+            if carte_actuelle[lig][col] == 1:
+                continue
+    
+def deplacer_joueur():
+    touches = pygame.key.get_pressed()
+    dx, dy = 0, 0
+    if touches[pygame.K_z]: dy -= joueur["vitesse"]
+    if touches[pygame.K_s]: dy += joueur["vitesse"]
+    if touches[pygame.K_q]: dx -= joueur["vitesse"]
+    if touches[pygame.K_d]: dx += joueur["vitesse"]
+
+    prochaine_col = int((joueur["x"] + dx) / TAILLE_TUILE)
+    prochaine_lig = int((joueur["y"] + dy) / TAILLE_TUILE)
+
+    joueur["en_mouvement"] = (dx != 0 or dy != 0)
+
+    if dy < 0: joueur["direction"] = "dos"
+    elif dy > 0: joueur["direction"] = "devant"
+    if dx < 0: joueur["direction"] = "gauche"
+    elif dx > 0: joueur["direction"] = "droite"
+
+    # Choisir le bon set de frames selon l'état
+    if joueur["etat_anim"] == "attaque":
+        nb_frames = 4
+        vitesse_anim = 6
+        cle = f"attaque_{joueur['direction']}"
+    elif joueur["en_mouvement"]:
+        joueur["etat_anim"] = "marche"
+        nb_frames = 6
+        vitesse_anim = 8
+        cle = joueur["direction"]
+    else:
+        joueur["etat_anim"] = "idle"
+        nb_frames = 6
+        vitesse_anim = 20
+        cle = f"idle_{joueur['direction']}"
+
+    joueur["timer_anim"] += 1
+    if joueur["timer_anim"] >= vitesse_anim:
+        joueur["timer_anim"] = 0
+        joueur["frame_actuelle"] += 1
+        if joueur["frame_actuelle"] >= nb_frames:
+            joueur["frame_actuelle"] = 0
+            if joueur["etat_anim"] == "attaque":
+                joueur["etat_anim"] = "idle"
+
+    prochaine_col = int((joueur["x"] + dx) / TAILLE_TUILE)
+    prochaine_lig = int((joueur["y"] + dy) / TAILLE_TUILE)
+
+    collision = False
+    if 0 <= prochaine_lig < len(carte_actuelle) and 0 <= prochaine_col < len(carte_actuelle[0]):
+        if carte_actuelle[prochaine_lig][prochaine_col] == 1:
+            collision = True
+    for arbre in arbres:
+        if prochaine_col == arbre["col"] and prochaine_lig == arbre["ligne_bas"]:
+            collision = True
+            break
+    if not collision:
+        joueur["x"] += dx
+        joueur["y"] += dy
+
+
+def attaquer():
+    global score, argent, timer_visuel_attaque, timer_attaque
+    mx, my = derniere_pos_souris_jeu
+
+    stats = armes_stats[arme_actuelle]
+
+    if timer_attaque > 0:
+        return
+    
+    joueur["etat_anim"] = "attaque"
+    joueur["frame_actuelle"] = 0
+    joueur["timer_anim"] = 0
+
+    timer_attaque = stats["cooldown"]
+    timer_visuel_attaque = 8
+
+    portee = stats["portee"]
+    angle_max = stats["angle"]
+    degats = stats["degats"]
+
+    # ✅ POSITION SOURIS CORRECTE
+    cam_x, cam_y = calcul_camera(joueur, carte_actuelle)
+    mx, my = souris_vers_jeu(pygame.mouse.get_pos())
+    mx += cam_x
+    my += cam_y
+
+    dx = mx - joueur["x"]
+    dy = my - joueur["y"]
+    distance = (dx**2 + dy**2) ** 0.5
+
+    if distance == 0:
+        return
+
+    dx /= distance
+    dy /= distance
+
+    morts = []
+
+    for ennemi in ennemis:
+        vx = ennemi["x"] - joueur["x"]
+        vy = ennemi["y"] - joueur["y"]
+        dist = (vx**2 + vy**2) ** 0.5
+
+        if dist > portee:
+            continue
+
+        if dist == 0:
+            continue
+
+        vx /= dist
+        vy /= dist
+
+        dot = dx * vx + dy * vy
+        dot = max(-1, min(1, dot))
+        angle = math.degrees(math.acos(dot))
+
+        if angle < angle_max:
+            ennemi["hp"] -= degats
+            ennemi["timer_hit"] = 8
+            degats_flottants.append({
+                "x": ennemi["x"] + random.randint(-10, 10),
+                "y": ennemi["y"] - 20,
+                "texte": str(degats),
+                "duree": 35,
+                "couleur": (255, 200, 50)
+            })
+            if ennemi["hp"] <= 0:
+                morts.append(ennemi)
+
+    for m in morts:
+        ennemis.remove(m)
+        score += m["score"]
+        argent += m["argent"]
+        
+        # Particules
+        for _ in range(8):
+            particules.append({
+                "x": m["x"], "y": m["y"],
+                "vx": random.uniform(-3, 3),
+                "vy": random.uniform(-4, 0),
+                "duree": random.randint(15, 25),
+                "couleur": m["teinte"]
+            })
+        
+        # Indicateur dégâts
+        degats_flottants.append({
+            "x": m["x"], "y": m["y"] - 20,
+            "texte": str(m["hp_max"]),
+            "duree": 40,
+            "couleur": (255, 80, 80)
+        })
+
+
+def souris_vers_jeu(pos):
+    fenetre_largeur, fenetre_hauteur = ecran.get_size()
+
+    ratio_x = fenetre_largeur / l
+    ratio_y = fenetre_hauteur / h
+    ratio = min(ratio_x, ratio_y)
+
+    nouvelle_largeur = int(l * ratio)
+    nouvelle_hauteur = int(h * ratio)
+
+    offset_x = (fenetre_largeur - nouvelle_largeur) // 2
+    offset_y = (fenetre_hauteur - nouvelle_hauteur) // 2
+
+    x = (pos[0] - offset_x) / ratio
+    y = (pos[1] - offset_y) / ratio
+
+    return int(x), int(y)
+
+def s(val):
+    return int(val * SCALE)
+
+def gerer_evenements():
+    global continuer, etat, image_actuel, numero_niveau, slot_actuel, \
+           bouton_sel_niveau, bouton_sel_niveau_special, arme1_actuelle, \
+           arme2_actuelle, img_arme1, img_arme2, bouton_arme1, \
+           arme1_debloquee, argent, hp, ecran, \
+           bouton_save1, bouton_save2, bouton_save3, bouton_rejouer, bouton_menu_go, distance, derniere_pos_souris_jeu, bouton_suite, scroll_sel_niveau, scroll_shop, arme_actuelle 
+    
+    for event in pygame.event.get():
+
+        if event.type == pygame.QUIT:
+            continuer = False
+
+        if event.type == pygame.VIDEORESIZE:
+            ecran = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+
+        if etat == "menu1":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    # On vérifie si on clique sur JOUER
+                    if bouton_jouer and bouton_jouer.collidepoint(souris):
+                        etat = "sauvegardes"  # On envoie vers l'écran de sélection de sauvegarde
+                    
+                    # (Gère aussi les autres boutons du menu1 ici)
+                    if bouton_credits and bouton_credits.collidepoint(souris):
+                        etat = "credits"
+                    if bouton_quitter and bouton_quitter.collidepoint(souris):
+                        continuer = False
+
+
+        if etat == "sauvegardes":
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+
+                    if bouton_save1 and bouton_save1.collidepoint(souris):
+                        slot_actuel = 1
+                        charger(1)
+                        etat = "menu2"
+
+                    elif bouton_save2 and bouton_save2.collidepoint(souris):
+                        slot_actuel = 2
+                        charger(2)
+                        etat = "menu2"
+
+                    elif bouton_save3 and bouton_save3.collidepoint(souris):
+                        slot_actuel = 3
+                        charger(3)
+                        etat = "menu2"
+
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+        if etat == "credits":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+        
+        
+        if etat == "menu2":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+
+                    if bouton_shop and bouton_shop.collidepoint(souris):
+                        etat = "shop"
+
+                    if bouton_sel_niveau and bouton_sel_niveau.collidepoint(souris):
+                        etat = "sel_niveau"
+
+                    if bouton_sel_niveau_special and bouton_sel_niveau_special.collidepoint(souris):
+                        etat = "sel_niveau_special"  # écran à créer plus tard
+
+                    if bouton_ecran_titre and bouton_ecran_titre.collidepoint(souris):
+                        etat = "menu1"
+
+
+        if etat == "sel_niveau":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+
+                    for rect, numero in boutons_niveaux:
+                        if rect.collidepoint(souris) and numero <= niveau_max:
+                            numero_niveau = numero
+                            charger_niveau(numero)
+                            etat = "niveau"
+
+                    if bouton_shop and bouton_shop.collidepoint(souris):
+                        etat = "shop"
+
+                    if bouton_menu and bouton_menu.collidepoint(souris):
+                        etat = "menu2"
+            if event.type == pygame.MOUSEWHEEL:
+                scroll_sel_niveau -= event.y * 30  # molette haut/bas
+                scroll_sel_niveau = max(0, scroll_sel_niveau)
+
+
+
+        elif etat == "niveau":
+            
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                x, y = souris_vers_jeu(event.pos)
+
+                dx = x - joueur["x"]
+                dy = y - joueur["y"]
+
+                distance = (dx**2 + dy**2) ** 0.5
+
+                if event.button == 1:
+                        derniere_pos_souris_jeu = souris_vers_jeu(event.pos)
+                        attaquer()
+
+
+                if bouton_menu and bouton_menu.collidepoint(souris):
+                    etat = "menu2"
+            
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_TAB:
+                    armes = list(armes_stats.keys())
+                    idx = armes.index(arme_actuelle)
+                    arme_actuelle = armes[(idx + 1) % len(armes)]
+
+            
+        elif etat == "shop":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    # Vérifie si le joueur clique sur l'arme
+                    if bouton_arme1 and bouton_arme1.collidepoint(souris):
+                        if arme1_debloquee == 0 and argent >= prix_arme1:
+                            argent -= prix_arme1
+                            arme1_debloquee = 1  # Débloque l'arme
+                            sauvegarder(slot_actuel)         # Sauvegarde les changements
+                    # Retour au menu
+                    if bouton_menu and bouton_menu.collidepoint(souris):
+                        etat = "menu2"  
+            if event.type == pygame.MOUSEWHEEL:
+                scroll_shop -= event.y * 30
+                scroll_shop = max(0, scroll_shop)
+
+        elif etat == "niveau_gagne":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+                if event.button == 1:
+                    if bouton_suite and bouton_suite.collidepoint(souris):
+                        if numero_niveau < len(niveaux):
+                            numero_niveau += 1
+                            charger_niveau(numero_niveau)
+                            etat = "niveau"
+                        else:
+                            etat = "sel_niveau"
+                    if bouton_menu_go and bouton_menu_go.collidepoint(souris):
+                        etat = "menu2"
+
+
+        elif etat == "game_over":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                souris = souris_vers_jeu(event.pos)
+
+                if event.button == 1:
+                    if bouton_rejouer and bouton_rejouer.collidepoint(souris):
+                        charger_niveau(numero_niveau)
+                        etat = "niveau"
+
+                    if bouton_menu_go and bouton_menu_go.collidepoint(souris):
+                        etat = "menu2"
+
+                
+
+def mettre_a_jour():
+    global timer_ennemi, timer_difficulte, delai_ennemi, score, etat, numero_niveau, objectif, niveau_max, vague, duree, slot_actuel, timer_visuel_attaque, timer_attaque
+    if etat != "niveau":
+        if timer_visuel_attaque > 0:
+            timer_visuel_attaque -= 1
+        return
+
+    logique_ennemis()
+
+    timer_ennemi += 1
+    timer_difficulte += 1
+
+    if timer_difficulte >= 600:
+        if delai_ennemi > 25:
+            delai_ennemi -= 5
+        timer_difficulte = 0
+
+    if timer_ennemi >= delai_ennemi:
+        creer_ennemi()
+        timer_ennemi = 0
+
+    # Game over si joueur mort OU objectif détruit
+    if joueur["hp"] <= 0 or objectifs_points[0]["hp"] <= 0:
+        etat = "game_over"
+        return
+
+
+    if score >= objectif:
+        print("Niveau terminé !")
+
+        if numero_niveau == niveau_max and niveau_max < len(niveaux):
+            niveau_max += 1
+
+        sauvegarder(slot_actuel)
+        etat = "niveau_gagne"
+        timer_ennemi = 0
+        timer_difficulte = 0
+
+    # changement de vague
+    if score >= vague * 500:
+        vague += 1
+        if delai_ennemi > 25:
+            delai_ennemi -= 5
+    
+    temps_actuel = pygame.time.get_ticks()
+
+    if timer_attaque > 0:
+        timer_attaque -= 1
+
+    # Mise à jour particules
+    for p in particules[:]:
+        p["x"] += p["vx"]
+        p["y"] += p["vy"]
+        p["vy"] += 0.2  # gravité
+        p["duree"] -= 1
+        if p["duree"] <= 0:
+            particules.remove(p)
+
+    # Mise à jour flottants
+    for d in degats_flottants[:]:
+        d["y"] -= 1
+        d["duree"] -= 1
+        if d["duree"] <= 0:
+            degats_flottants.remove(d)
+    
+    deplacer_joueur()
+
+def afficher():
+    global bouton_menu, bouton_shop, bouton_sel_niveau, bouton_succes
+    global bouton_jouer, bouton_quitter, bouton_ecran_titre
+    global bouton_sel_niveau_special, arme1_debloquee
+    global bouton_arme1, hp, bouton_credits, bouton_sauvegardes
+    global bouton_save1, bouton_save2, bouton_save3, bouton_menu_go, bouton_rejouer, scroll_sel_niveau, scroll_shop, bouton_suite
+
+    if etat == "menu1":
+        surface_jeu.fill((15, 15, 30))  # fond sombre
+
+        # Titre du jeu
+        police_titre = pygame.font.SysFont(None, 120)
+        titre = police_titre.render("THE GOBLIN GAME", True, blanc)
+        rect_titre = titre.get_rect(center=(960,120))
+        surface_jeu.blit(titre, rect_titre)
+
+        # Sous titre
+        police_sous = pygame.font.SysFont(None, 40)
+        sous = police_sous.render("A Christmas Goblin Adventure", True, (180,180,180))
+        rect_sous = sous.get_rect(center=(960,180))
+        surface_jeu.blit(sous, rect_sous)
+
+        # Boutons élargis et espacés (X=760, Largeur=400, Hauteur=80)
+        bouton_jouer = button(blanc, "JOUER", 760, 350, 400, 80, noir, font, around=2)
+        bouton_succes = button(blanc, "SUCCES", 760, 480, 400, 80, noir, font, around=2)
+        bouton_credits = button(blanc, "CREDITS", 760, 610, 400, 80, noir, font, around=2)
+        bouton_quitter = button(blanc, "QUITTER", 760, 740, 400, 80, noir, font, around=2)
+    
+    if etat == "sauvegardes":
+        surface_jeu.fill((15, 15, 30))
+        
+        police_titre = pygame.font.SysFont(None, 80)
+        titre_save = police_titre.render("CHOISISSEZ VOTRE PARTIE", True, blanc)
+        surface_jeu.blit(titre_save, titre_save.get_rect(center=(s(960), s(100))))
+
+        bouton_ecran_titre = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+        
+        y_depart = 280
+        espacement_slot = 220 
+        
+        global bouton_save1, bouton_save2, bouton_save3
+
+        for i in range(1, 4):
+            y_actuel = y_depart + (i-1) * espacement_slot
+            rect = button(blanc, f"SAUVEGARDE {i}", 760, y_actuel, 400, 80, noir, font, 2)
+            
+            if i == 1: bouton_save1 = rect
+            elif i == 2: bouton_save2 = rect
+            elif i == 3: bouton_save3 = rect
+            
+            infos = recuperer_infos_save(i)
+            
+            if infos is not None:
+                texte_info = f"Niveau Max : {infos['niv']} | Argent : {infos['argent']} | Armes : {infos['nb']}"
+                couleur_info = (0, 255, 150)
+            else:
+                texte_info = "Emplacement vide - "
+                couleur_info = (150, 150, 150)
+            
+            img_rendue = font.render(texte_info, True, couleur_info)
+            rect_rendu = img_rendue.get_rect(center=(s(960), s(y_actuel + 110)))
+            surface_jeu.blit(img_rendue, rect_rendu)
+
+    if etat == "credits":
+        surface_jeu.fill((15, 15, 30))
+        
+        bouton_ecran_titre = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+
+        credits = [
+                    "THE GOBLIN GAME",
+                    "",
+                    "Un jeu réalisé dans le cadre du projet NSI",
+                    "",
+                    "Développement : Dan et Louis",
+                    "Concept : Dan et Louis",
+                    "Motivateur du groupe : Antoine",
+                    "Graphismes :",
+                    "Ennemis, boules et décor de Noël",
+                    "",
+                    "Technologie : Python / Pygame",
+                    "",
+                    "2025 - 2026",
+                    "",
+                    "Merci d'avoir joué !"
+                    ]
+        y = int(200*SCALE)
+        for ligne in credits:
+            texte = font.render(ligne, True, blanc)
+            # On demande à Pygame de centrer chaque ligne de texte au milieu de l'écran (960)
+            rect_texte = texte.get_rect(center=(int(960*SCALE), y))
+            surface_jeu.blit(texte, rect_texte)
+            y += int(40*SCALE)
+    
+    
+    if etat == "menu2":
+        surface_jeu.fill(bon_bleu)
+
+        # Correction de l'erreur ici aussi
+        bouton_ecran_titre = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+        
+        # Le bouton shop en haut à droite
+        bouton_shop = button(blanc, "SHOP", 1750, 20, 150, 50, noir, font, 2)
+
+        # Boutons centraux massifs (X=710, Largeur=500, Hauteur=100)
+        bouton_sel_niveau = button(blanc, "NIVEAUX HISTOIRE", 710, 400, 500, 100, noir, font, 2)
+        bouton_sel_niveau_special = button(blanc, "NIVEAUX SPÉCIAUX", 710, 550, 500, 100, noir, font, 2)
+
+
+    if etat == "sel_niveau":
+        surface_jeu.fill(bon_bleu)
+        
+        global boutons_niveaux
+        boutons_niveaux = []
+
+        # Boutons d'interface de base
+        bouton_menu = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+        bouton_shop = button(blanc, "SHOP", 1750, 20, 150, 50, noir, font, 2)
+
+        texte_niv = font.render(f"Niveau max : {niveau_max}", True, blanc)
+        surface_jeu.blit(texte_niv, (s(20), s(100)))
+
+        # Configuration de la grille et de la taille des boutons
+        largeur_btn = 200  # Des boutons bien plus larges !
+        hauteur_btn = 80
+        espacement_x = 40
+        espacement_y = 40
+        
+        # Point de départ X pour que le bloc de 5 boutons soit parfaitement centré
+        # Largeur totale = (5 * 200) + (4 * 40) = 1160. Milieu = (1920 - 1160) / 2 = 380
+        x_depart = 380
+        y_depart = 180 - scroll_sel_niveau
+        
+        x = x_depart
+        y = y_depart
+
+        for i in range(len(niveaux)):
+            numero = i + 1
+            
+            # --- GESTION DES THÈMES TOUS LES 10 NIVEAUX ---
+            if i % 10 == 0:
+                monde = (i // 10) + 1
+                
+                # Définir le nom du thème
+                if monde == 1:
+                    nom_theme = "Monde 1 : La Forêt"
+                else:
+                    nom_theme = f"Monde {monde} : (À découvrir)"
+                
+                # Créer un peu d'espace si ce n'est pas le premier monde
+                if i > 0:
+                    y += 80 
+                
+                # Afficher le titre du thème bien centré
+                police_titre = pygame.font.SysFont(None, 60)
+                titre_theme = police_titre.render(nom_theme, True, (255, 200, 50)) # Titre doré
+                rect_titre = titre_theme.get_rect(center=(s(960), s(y)))
+                surface_jeu.blit(titre_theme, rect_titre)
+                
+                # Descendre le Y pour commencer à placer les boutons sous le titre
+                y += 70 
+                x = x_depart # Réinitialiser le X au début de la ligne
+            
+            # --- CRÉATION DU BOUTON ---
+            if numero <= niveau_max:
+                rect = button(blanc, f"Niv {numero}", x, y, largeur_btn, hauteur_btn, noir, font, 2)
+            else:
+                rect = button(gris, f"Niv {numero}", x, y, largeur_btn, hauteur_btn, noir, font, 2)
+
+            boutons_niveaux.append((rect, numero))
+
+            # --- DÉPLACEMENT POUR LE PROCHAIN BOUTON ---
+            x += largeur_btn + espacement_x
+
+            # Retour à la ligne tous les 5 boutons
+            if (i + 1) % 5 == 0:
+                x = x_depart
+                y += hauteur_btn + espacement_y
+
+
+    elif etat == "niveau":
+        dessiner_jeu()       
+
+        bouton_menu = button(blanc, "MENU", 20, 20, 120, 50, noir, font, 2)
+
+    elif etat == "shop":
+        surface_jeu.fill((40, 40, 60))
+
+        # Titre et interface
+        police_titre = pygame.font.SysFont(None, 80)
+        titre_shop = police_titre.render("BOUTIQUE D'ARMEMENT", True, blanc)
+        surface_jeu.blit(titre_shop, titre_shop.get_rect(center=(s(960), s(60))))
+
+        # Argent en haut à droite, bien visible
+        texte_argent = font.render(f"Tes Pièces : {argent}", True, (255, 215, 0))
+        surface_jeu.blit(texte_argent, (s(1550), s(20)))
+
+        bouton_menu = button(blanc, "RETOUR", 20, 20, 150, 50, noir, font, 2)
+
+        # --- EMPLACEMENT ARME 1 (Haut Gauche) ---
+        x1 = 350
+        y1 = 350 - scroll_shop
+        
+        # Image de l'arme centrée au-dessus de son bouton
+        img_shop = pygame.image.load("images/niveau_noel/arme1.png").convert_alpha()
+        img_shop = pygame.transform.smoothscale(img_shop, (s(100), s(100)))
+        surface_jeu.blit(img_shop, (s(x1 + 150), s(y1 - 120)))
+
+        if arme1_debloquee == 1:
+            bouton_arme1 = button(gris, "DÉBLOQUÉE", x1, y1, 400, 80, noir, font, 2)
+        else:
+            bouton_arme1 = button(blanc, f"FUSIL FEU ({prix_arme1})", x1, y1, 400, 80, noir, font, 2)
+            
+        # --- EMPLACEMENT ARME 2 (Futur - Haut Droite) ---
+        # Tu peux déjà dessiner un rectangle vide ou un "Bientôt disponible"
+        # x2, y2 = 1170, 350
+        # button(gris, "BIENTÔT...", x2, y2, 400, 80, noir, font, 2)
+
+    elif etat == "niveau_gagne":
+        surface_jeu.fill((0, 20, 0))
+
+        police_titre = pygame.font.SysFont(None, 120)
+        titre = police_titre.render("NIVEAU TERMINÉ !", True, (50, 255, 50))
+        surface_jeu.blit(titre, titre.get_rect(center=(s(960), s(300))))
+
+        police_sub = pygame.font.SysFont(None, 60)
+        sub = police_sub.render(f"Score : {score}  |  Argent gagné : {argent}", True, blanc)
+        surface_jeu.blit(sub, sub.get_rect(center=(s(960), s(420))))
+
+        bouton_suite = button(blanc, "NIVEAU SUIVANT", 560, 550, 400, 80, noir, font, 2)
+        bouton_menu_go = button(blanc, "MENU", 1060, 550, 300, 80, noir, font, 2)
+
+    elif etat == "game_over":
+        surface_jeu.fill((20, 0, 0))
+
+        police_titre = pygame.font.SysFont(None, 150)
+        titre = police_titre.render("GAME OVER", True, (220, 0, 0))
+        surface_jeu.blit(titre, titre.get_rect(center=(s(960), s(350))))
+
+        bouton_rejouer = button(blanc, "REJOUER", 660, 500, 300, 80, noir, font, 2)
+        bouton_menu_go = button(blanc, "MENU", 1060, 500, 300, 80, noir, font, 2)
+
+
+    fenetre_largeur, fenetre_hauteur = ecran.get_size()
+
+    ratio_x = fenetre_largeur / l
+    ratio_y = fenetre_hauteur / h
+    ratio = min(ratio_x, ratio_y)
+
+    nouvelle_largeur = int(l * ratio)
+    nouvelle_hauteur = int(h * ratio)
+
+    surface_scale = pygame.transform.smoothscale(surface_jeu, (nouvelle_largeur, nouvelle_hauteur))
+
+    x = (fenetre_largeur - nouvelle_largeur) // 2
+    y = (fenetre_hauteur - nouvelle_hauteur) // 2
+
+    ecran.fill((0,0,0))
+    ecran.blit(surface_scale, (x, y))
+
+    pygame.display.flip()
+
+
+def dessiner_carte(cam_x, cam_y):
+    """
+    Dessine la carte et les éléments dessus en tenant compte de la caméra.
+    cam_x, cam_y : position de la caméra calculée par calcul_camera
+    """
+    # Dessin des tuiles (sauf haut des arbres)
+    for ligne in range(len(carte_actuelle)):
+        for col in range(len(carte_actuelle[ligne])):
+            tuile = carte_actuelle[ligne][col]
+            if tuile != 5:  # On ne dessine pas le haut des arbres ici
+                surface_jeu.blit(
+                    images_tuiles[tuile],
+                    (col * TAILLE_TUILE - cam_x, ligne * TAILLE_TUILE - cam_y)
+                )
+
+    # Dessin des arbres par-dessus
+    for arbre in arbres:
+        col = arbre["col"]
+        ligne_haut = arbre["ligne_haut"]
+        if 0 <= ligne_haut < len(carte_actuelle):
+            surface_jeu.blit(
+                images_tuiles[5],
+                (col * TAILLE_TUILE - cam_x, ligne_haut * TAILLE_TUILE - cam_y)
+            )
+
+    # Dessiner les objectifs
+    for obj in objectifs_points:
+        x = obj["x"] - TAILLE_TUILE // 2 - cam_x
+        y = obj["y"] - TAILLE_TUILE // 2 - cam_y
+        pygame.draw.rect(surface_jeu, (255, 215, 0), (x, y, TAILLE_TUILE, TAILLE_TUILE))
+
+def dessiner_jeu():
+    global hp, timer_visuel_attaque
+
+     # --- Calcul caméra ---
+    cam_x, cam_y = calcul_camera(joueur, carte_actuelle)
+
+    # Fond de base (au cas où la carte ne couvre pas tout l'écran)
+    surface_jeu.fill(noir) 
+
+    # Dessiner la carte avec la caméra
+    dessiner_carte(cam_x, cam_y)
+
+    # 1. Dessiner le cercle d'attaque (si on vient de cliquer)
+    mx, my = souris_vers_jeu(pygame.mouse.get_pos())
+    mx += cam_x 
+    my += cam_y
+
+    stats = armes_stats[arme_actuelle]
+
+    portee = stats["portee"]
+    angle_deg = stats["angle"]
+
+
+    dx = mx - joueur["x"]
+    dy = my - joueur["y"]
+    distance = (dx**2 + dy**2) ** 0.5
+
+    if distance != 0:
+        dx /= distance
+        dy /= distance
+
+    angle_base = math.atan2(dy, dx)
+    angle_rad = math.radians(angle_deg)
+
+    points = [(joueur["x"], joueur["y"])]
+    
+
+    nb_points = 25
+
+    for i in range(nb_points + 1):
+        angle = angle_base - angle_rad/2 + (angle_rad * i / nb_points)
+
+        x = joueur["x"] + math.cos(angle) * portee
+        y = joueur["y"] + math.sin(angle) * portee
+
+        points.append((x, y))
+
+    surface = pygame.Surface((l, h), pygame.SRCALPHA)
+
+    # Couleur selon arme
+    if arme_actuelle == "arc":
+        couleur = (100, 200, 255, 80)
+    elif arme_actuelle == "shotgun":
+        couleur = (255, 200, 100, 80)
+    elif arme_actuelle == "laser":
+        couleur = (255, 50, 50, 80)
+
+    points_cam = [(x - cam_x, y - cam_y) for x, y in points]
+    pygame.draw.polygon(surface, couleur, points_cam)
+
+    surface_jeu.blit(surface, (0, 0))
+
+    # 2. Dessiner le joueur
+    if joueur["etat_anim"] == "attaque":
+        cle = f"attaque_{joueur['direction']}"
+    elif joueur["en_mouvement"]:
+        cle = joueur["direction"]
+    else:
+        cle = f"idle_{joueur['direction']}"
+
+    img_joueur = frames_joueur[cle][joueur["frame_actuelle"]]
+    surface_jeu.blit(img_joueur, (
+    int(joueur["x"] - cam_x - img_joueur.get_width()//2),
+    int(joueur["y"] - cam_y - img_joueur.get_height()//2)
+    ))
+
+    # === BARRE DE COOLDOWN ===
+    stats = armes_stats[arme_actuelle]
+    cd_max = stats["cooldown"]
+
+    if cd_max > 0:
+        ratio = 1 - (timer_attaque / cd_max)
+    else:
+        ratio = 1
+
+    largeur_max = 50
+    hauteur = 6
+
+    x_barre = joueur["x"] - cam_x - largeur_max // 2
+    y_barre = joueur["y"] - cam_y - 40  # cooldown
+    
+    # fond
+    pygame.draw.rect(surface_jeu, (50, 50, 50), (x_barre, y_barre, largeur_max, hauteur))
+
+    # progression
+    pygame.draw.rect(surface_jeu, (0, 200, 255), (x_barre, y_barre, int(largeur_max * ratio), hauteur))
+
+    # 3. Barre de vie du Joueur (en haut à gauche par exemple)
+    # === BARRE DE VIE JOUEUR ===
+    hp_ratio = joueur["hp"] / 100
+
+    largeur_max = 50
+    hauteur = 6
+
+    x_barre = joueur["x"] - cam_x - largeur_max // 2
+    y_barre = joueur["y"] - cam_y - 55
+
+    # fond
+    pygame.draw.rect(surface_jeu, (60, 0, 0), (x_barre, y_barre, largeur_max, hauteur))
+
+    # vie
+    pygame.draw.rect(surface_jeu, (0, 255, 0), (x_barre, y_barre, int(largeur_max * hp_ratio), hauteur))
+
+    # --- INDICATIONS EN JEU (HUD) ---
+    police = pygame.font.SysFont(None, 40)
+
+    # --- AFFICHAGE DES ARMES EN HAUT A DROITE ---
+    texte_arme = police.render(f"Arme : {arme_actuelle}", True, blanc)
+    surface_jeu.blit(texte_arme, (s(1700), s(30)))
+    
+    # On les aligne tous à gauche (x = 20) et on les descend proprement (y = 90, 130, 170, 210)
+    texte_obj = police.render(f"Objectif : {objectif}", True, blanc)
+    surface_jeu.blit(texte_obj, (s(20), s(90)))
+
+    texte_score = police.render(f"Score : {score}", True, blanc)
+    surface_jeu.blit(texte_score, (s(20), s(130)))
+
+    texte_argent = police.render(f"Argent : {argent}", True, blanc)
+    surface_jeu.blit(texte_argent, (s(20), s(170)))
+
+    texte_vague = police.render(f"Vague : {vague}", True, blanc)
+    surface_jeu.blit(texte_vague, (s(20), s(210)))
+    
+    # ennemis
+    # ennemis
+    for ennemi in ennemis:
+        x = ennemi["x"] - cam_x
+        y = ennemi["y"] - cam_y
+        hp = ennemi["hp"]
+        hp_max = ennemi["hp_max"]
+
+        ennemi["timer_anim"] += 1
+        if ennemi["timer_anim"] >= 8:
+            ennemi["timer_anim"] = 0
+            ennemi["frame_actuelle"] = (ennemi["frame_actuelle"] + 1) % NB_FRAMES
+
+        direction = ennemi.get("direction", "devant")
+        img_frame = ennemi["frames"][direction][ennemi["frame_actuelle"]]
+
+        # Spawn ou affichage normal
+        if ennemi["en_spawn"]:
+            t = max(1, ennemi["taille_spawn"])
+            img_scaled = pygame.transform.smoothscale(img_frame, (t, t))
+            surface_jeu.blit(img_scaled, (x - t//2, y - t//2))
+        else:
+            surface_jeu.blit(img_frame, (x - img_frame.get_width()//2, y - img_frame.get_height()//2))
+
+        # Flash rouge si touché
+        if ennemi["timer_hit"] > 0:
+            img_hit = img_frame.copy()
+            img_hit.fill((255, 0, 0, 120), special_flags=pygame.BLEND_RGBA_MULT)
+            surface_jeu.blit(img_hit, (x - img_frame.get_width()//2, y - img_frame.get_height()//2))
+            ennemi["timer_hit"] -= 1
+
+        # Barre de vie
+        ratio = hp / hp_max
+        largeur_max = s(40) + hp_max
+        largeur = int(ratio * largeur_max)
+        if ratio > 0.6: couleur = (0, 200, 0)
+        elif ratio > 0.3: couleur = (230, 180, 0)
+        else: couleur = (200, 0, 0)
+        pygame.draw.rect(surface_jeu, (60,0,0), (x-largeur_max//2, y-int(30*SCALE), largeur_max, int(5*SCALE)))
+        pygame.draw.rect(surface_jeu, couleur, (x-largeur_max//2, y-int(30*SCALE), largeur, int(5*SCALE)))
+
+    # ← EN DEHORS de la boucle ennemis
+
+    # Pulsation + barre vie objectif
+    for obj in objectifs_points:
+        pulse = 1.0
+        if obj["hp"] / obj["hp_max"] < 0.3:
+            pulse = 1.0 + math.sin(pygame.time.get_ticks() * 0.01) * 0.15
+        taille_obj = int(TAILLE_TUILE * pulse)
+        pygame.draw.rect(surface_jeu, (255, 215, 0),
+            (obj["x"] - cam_x - taille_obj//2, obj["y"] - cam_y - taille_obj//2, taille_obj, taille_obj))
+        pygame.draw.rect(surface_jeu, (200, 0, 0), (obj["x"]-50 - cam_x, obj["y"]-60 - cam_y, 100, 10))
+        largeur_vie = (obj["hp"] / obj["hp_max"]) * 100
+        pygame.draw.rect(surface_jeu, (0, 200, 0), (obj["x"]-50 - cam_x, obj["y"]-60 - cam_y, largeur_vie, 10))
+
+    # Flash blanc attaque
+    # Flash blanc attaque
+    if timer_visuel_attaque > 0:
+        alpha = int((timer_visuel_attaque / 8) * 60)
+        flash = pygame.Surface((l, h))
+        flash.set_alpha(alpha)
+        flash.fill((255, 255, 255))
+        surface_jeu.blit(flash, (0, 0))
+        timer_visuel_attaque -= 1
+
+    # Particules
+    for p in particules:
+        pygame.draw.circle(surface_jeu, p["couleur"],
+            (int(p["x"] - cam_x), int(p["y"] - cam_y)), 4)
+
+    # Indicateurs flottants
+    police_dmg = pygame.font.SysFont(None, 36)
+    for d in degats_flottants:
+        texte = police_dmg.render(d["texte"], True, d["couleur"])
+        surface_jeu.blit(texte, (int(d["x"] - cam_x - texte.get_width()//2), int(d["y"] - cam_y)))
+    
+
+
+#Boucle principale
+continuer = True
+etat = "menu1"
+
+while continuer:
+    gerer_evenements()
+
+    if etat == "niveau":
+        mettre_a_jour()
+
+    afficher()
+
+    horloge.tick(60)
+
+if slot_actuel != 0:
+    sauvegarder(slot_actuel)
+pygame.quit()
+
+
+'''
+def animer_flocons():
+    for f in flocons:
+        f[1] += f[2]
+        if f[1] > h:
+            f[1] = -5
+            f[0] = random.randint(0, l)
+
+surface_jeu.fill(bon_bleu)
+    surface_jeu.blit(fond, (0, 0))
+'''
