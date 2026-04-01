@@ -1,0 +1,235 @@
+import pygame
+import random
+
+pygame.init()
+
+fond = pygame.image.load("images/niveau_noel/sapin.png")
+fond = pygame.transform.scale(fond, (1200, 900))
+
+l = 1200
+h = 900
+ecran = pygame.display.set_mode((l, h))
+pygame.display.set_caption("Jeu du lutin")
+
+bon_bleu = (10, 20, 40)
+blanc = (255, 255, 255)
+
+score = 0
+
+bla = 4
+pn = 0
+bdn = 1
+
+images_boules = ["images/niveau_noel/boule1.png", "images/niveau_noel/boule2.png", "images/niveau_noel/boule3.png", "images/niveau_noel/boule4.png"]
+current_boule = 0
+image_boule = (images_boules[current_boule])
+boule_c = pygame.image.load(images_boules[current_boule])
+boule_c = pygame.transform.scale(boule_c, (40, 40))
+img_lutin = pygame.image.load("images/niveau_noel/vlutin.png").convert_alpha()
+img_lutin = pygame.transform.scale(img_lutin, (40, 40))
+image_rares = [pn, bdn]
+image_actuel = 0
+img_pn = pygame.image.load("images/niveau_noel/pere_noel.png").convert_alpha()
+img_pn = pygame.transform.scale(img_pn, (70, 70))
+img_bdn = pygame.image.load("images/niveau_noel/bonhomme_de_neige.png").convert_alpha()
+img_bdn = pygame.transform.scale(img_bdn, (70, 70))
+
+couleurs = [
+    (255, 0, 0),     # rouge
+    (0, 255, 0),     # vert
+    (255, 255, 0),   # jaune
+    (0, 0, 255),      # bleu
+    (255, 255, 255)  # blanc
+    ]
+
+nb_flocons = 100
+flocons = []
+
+for i in range(nb_flocons):
+    x = random.randint(0, l)
+    y = random.randint(0, h)
+    vitesse = random.randint(1, 3)
+    flocons.append([x, y, vitesse])
+
+lutins = []
+
+timer_lutin = 0
+delai_lutin = 90 
+
+timer_difficulte = 0
+
+horloge = pygame.time.Clock()
+
+boules = []
+images_spéciales = []
+
+#Fonctions d'aide
+def lutin_colore(image, couleur):
+    img = image.copy()
+    img.fill(couleur, special_flags=pygame.BLEND_RGBA_MULT)
+    return img
+
+def creer_lutin():
+    if random.randint(0, 14) == 0:
+        indice = bla
+        type_special = random.randint(0, 1)
+        zone = random.randint(0, 1)
+        x = random.randint(100, l - 100)
+        if zone == 0:
+            y = random.randint(0, 150)
+        else:
+            y = random.randint(h - 150, h)
+        img_coloree = lutin_colore(img_lutin, couleurs[indice])
+        lutins.append([x, y, img_coloree, indice, type_special])
+
+    else:
+        indice = random.randint(0, 3)
+        Ax, Ay = 200, 720
+        Bx, By = 1000, 720
+        Cx, Cy = 600, 0
+        r1 = random.random()
+        r2 = random.random()
+        if r1 + r2 > 1:
+            r1 = 1 - r1
+            r2 = 1 - r2
+        x = Ax + r1 * (Bx - Ax) + r2 * (Cx - Ax)
+        y = Ay + r1 * (By - Ay) + r2 * (Cy - Ay)
+    img_coloree = lutin_colore(img_lutin, couleurs[indice])
+    lutins.append([x, y, img_coloree, indice, -1])
+    
+
+#Boucle principale
+continuer = True
+while continuer:
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            continuer = False
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            x, y = event.pos
+            if event.button == 1:
+                boules.append((x, y, boule_c, current_boule))
+            if event.button == 3:
+                images_spéciales.append((x, y, image_rares[image_actuel]))
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_e and len(boules) > 0:
+                boules.pop()
+            if event.key == pygame.K_d:
+                current_boule += 1
+                if current_boule >= len(images_boules):
+                    current_boule = 0
+                boule_c = pygame.image.load(images_boules[current_boule])
+                boule_c = pygame.transform.scale(boule_c, (40, 40))
+            if event.key == pygame.K_f:
+                bdn = pygame
+                boules.pop()
+            if event.key == pygame.K_s:
+                image_actuel += 1
+                if image_actuel >= len(image_rares):
+                    image_actuel = 0
+
+
+
+
+    timer_lutin += 1
+    timer_difficulte += 1
+
+    if timer_difficulte >= 600:  
+        if delai_lutin > 25:    
+            delai_lutin -= 5
+        timer_difficulte = 0
+
+    if timer_lutin >= delai_lutin:
+        creer_lutin()
+        timer_lutin = 0
+
+    for lutin in lutins[:]:
+        lx, ly, img_lutin_col, ind_lutin, type_special = lutin
+        for boule in boules[:]:
+            bx, by, img_boule, ind_boule = boule
+            dx = lx - bx
+            dy = ly - by
+            distance = (dx*dx + dy*dy) ** 0.5
+            if distance < 30:
+                if ind_lutin == ind_boule:
+                    score += 100
+                    lutins.remove(lutin)
+                else:
+                    score -= 500
+                boules.remove(boule)
+                break
+
+    for obj in images_spéciales[:]:
+        ox, oy, ind_obj = obj
+        for lutin in lutins[:]:
+            lx, ly, img, ind_lutin, type_special = lutin
+            dx = ox - lx
+            dy = oy - ly
+            distance = (dx*dx + dy*dy) ** 0.5
+            if distance < 35:
+                if ind_lutin == bla:
+                    score += 150
+                    lutins.remove(lutin)
+                    images_spéciales.remove(obj)
+                    break
+
+
+
+
+    for f in flocons:
+        f[1] += f[2]
+        if f[1] > h:
+            f[1] = -5
+            f[0] = random.randint(0, l)
+
+    #Draw
+    ecran.fill(bon_bleu)
+    ecran.blit(fond, (0, 0))
+    ecran.blit(boule_c, (l - 60, 20))
+    pygame.draw.rect(ecran, blanc, (l - 65, 15, 50, 50), 2)
+    pygame.draw.rect(ecran, blanc, (l - 160, 15, 80, 80), 2)
+
+    if image_rares[image_actuel] == pn:
+        ecran.blit(img_pn, (l - 155, 20))
+    else:
+        ecran.blit(img_bdn, (l - 155, 20))
+
+
+    police = pygame.font.SysFont(None, 40)
+    texte_score = police.render(f"Score : {score}", True, blanc)
+    ecran.blit(texte_score, (20, 20))
+
+
+
+
+    for x, y, img, ind, type_special in lutins:
+        ecran.blit(img, (x - 20, y - 20))
+
+    for f in flocons:
+        pygame.draw.circle(ecran, blanc, (f[0], f[1]), 3)
+
+
+    for x, y, img, ind in boules:
+        ecran.blit(img, (x-20, y-20))
+
+    for b in boules[:]:
+        bx, by, bimg, bind = b
+        for lu in lutins[:]:
+            lx, ly, limg, lind, ltype = lu
+            dx = bx - lx
+            dy = by - ly
+            distance = (dx*dx + dy*dy) ** 0.5
+            if distance < 30 and bind == lind:
+                lutins.remove(lu)
+
+    for x, y, ind in images_spéciales:
+        if ind == pn:
+            ecran.blit(img_pn, (x - 20, y - 20))
+        else:
+            ecran.blit(img_bdn, (x - 20, y - 30))
+
+
+    pygame.display.flip()
+    horloge.tick(60)
+
+pygame.quit()
